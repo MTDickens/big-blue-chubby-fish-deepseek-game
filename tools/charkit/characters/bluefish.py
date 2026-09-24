@@ -280,13 +280,18 @@ def sculpt_dress():
     D = sdf.Field('dress')
     dc = C['dress']
     torso = [(0, 0.36), (0.066, 0.36), (0.073, 0.40), (0.072, 0.44), (0.066, 0.475), (0.05, 0.498), (0.03, 0.51), (0, 0.51)]
-    D.add(sdf.lathe(torso, squash_y=0.82), dc, k=0.0)
+    D.parts = {'body': [], 'sleeve.L': [], 'sleeve.R': []}
+    tor = sdf.lathe(torso, squash_y=0.82)
+    D.parts['body'].append(tor[0])
+    D.add(tor, dc, k=0.0)
 
     def folds(th, z):
         t = np.clip((0.40 - z) / 0.2, 0, 1)
         return 1 + (0.03 * np.sin(th * 9) + 0.012 * np.sin(th * 4 + 1)) * t ** 1.3
     skirt = [(0, 0.405), (0.074, 0.405), (0.1, 0.385), (0.135, 0.34), (0.162, 0.29), (0.178, 0.245), (0.184, 0.21), (0.176, 0.198), (0, 0.198)]
-    D.add(sdf.lathe(skirt, mod=folds), dc, k=0.012)
+    sk = sdf.lathe(skirt, mod=folds)
+    D.parts['body'].append(sk[0])
+    D.add(sk, dc, k=0.012)
     D.paint(sdf.lathe([(0, 0.19), (0.3, 0.19), (0.3, 0.232), (0, 0.232)]), C['dress_band'], k=0.004)
     D.paint(sdf.torus((0, 0, 0.236), 0.176, 0.0025), C['gold'], k=0.0015)
     # puffy sleeves, arms relaxed and a little forward
@@ -294,15 +299,21 @@ def sculpt_dress():
         sh = np.array([s * 0.066, 0.0, 0.482], dtype=np.float32)
         el = np.array([s * 0.112, -0.022, 0.405], dtype=np.float32)
         wr = np.array([s * 0.132, -0.042, 0.35], dtype=np.float32)
-        D.add(sdf.round_cone(sh, el, 0.037, 0.028), dc, k=0.014)
-        D.add(sdf.round_cone(el, wr, 0.027, 0.03), dc, k=0.006)
+        a1 = sdf.round_cone(sh, el, 0.037, 0.028)
+        a2 = sdf.round_cone(el, wr, 0.027, 0.03)
+        D.parts['sleeve.L' if s > 0 else 'sleeve.R'] += [a1[0], a2[0]]
+        D.add(a1, dc, k=0.014)
+        D.add(a2, dc, k=0.006)
     # neck bow (navy) with a silver button
     add_bow(D, (0, -0.064, 0.49), 0.03, (0, -1, 0), dc, knot_col=C['silver'])
     return D
 
 
 def sculpt_white():
+    """Returns (body, limbs, head) fields: kept apart so parts on different bones never fuse."""
     Wf = sdf.Field('white')
+    Wl = sdf.Field('white_limbs')
+    Wh = sdf.Field('white_head')
     wc = C['white']
     down = lambda P, T: np.array([P[0] * 0.25, P[1] * 0.25, -1.0])
     out_h = lambda P, T: np.array([P[0], P[1], 0.0])
@@ -334,9 +345,9 @@ def sculpt_white():
     for sd in (-1, 1):
         wr = np.array([sd * 0.134, -0.044, 0.346], dtype=np.float32)
         cuff = [wr + np.array((0.03 * math.cos(a), 0.024 * math.sin(a), 0.004 * math.sin(a)), dtype=np.float32) for a in np.linspace(0, 2 * math.pi, 10, endpoint=False)]
-        sdf.frill(Wf, cuff, 0.018, 0.0035, 9, 0.004, wc, lambda P, T, wr=wr: (P - wr) * np.array([1, 1, 0]) + np.array([0, 0, -0.012]), closed=True, k=0.006)
+        sdf.frill(Wl, cuff, 0.018, 0.0035, 9, 0.004, wc, lambda P, T, wr=wr: (P - wr) * np.array([1, 1, 0]) + np.array([0, 0, -0.012]), closed=True, k=0.006)
         sock = [np.array((sd * 0.048 + 0.03 * math.cos(a), 0.03 * math.sin(a), 0.108), dtype=np.float32) for a in np.linspace(0, 2 * math.pi, 10, endpoint=False)]
-        sdf.frill(Wf, sock, 0.02, 0.0035, 10, 0.004, wc, lambda P, T, sd=sd: np.array([P[0] - sd * 0.048, P[1], 0.9]), closed=True, k=0.006)
+        sdf.frill(Wl, sock, 0.02, 0.0035, 10, 0.004, wc, lambda P, T, sd=sd: np.array([P[0] - sd * 0.048, P[1], 0.9]), closed=True, k=0.006)
     # maid headdress: band + gathered lace arching over the crown (tilted forward)
     tilt = math.radians(24)
     arc = []
@@ -345,11 +356,11 @@ def sculpt_white():
         d = np.array([math.sin(a), -math.sin(tilt) * math.cos(a), math.cos(a) * math.cos(tilt)], dtype=np.float32)
         r = 1.0 / math.sqrt((d[0] / (HR[0] + 0.046)) ** 2 + (d[1] / (HR[1] + 0.046)) ** 2 + (d[2] / (HR[2] + 0.04)) ** 2)
         arc.append(HC + np.array([0, 0.016, 0.02], dtype=np.float32) + d * r)
-    Wf.ribbon(arc, 0.012, 0.006, wc, k=0.004, up=np.array([0, -math.cos(tilt), -math.sin(tilt)], dtype=np.float32))
-    sdf.frill(Wf, arc, 0.042, 0.004, 20, 0.007, wc, lambda P, T: P - HC, k=0.006)
+    Wh.ribbon(arc, 0.012, 0.006, wc, k=0.004, up=np.array([0, -math.cos(tilt), -math.sin(tilt)], dtype=np.float32))
+    sdf.frill(Wh, arc, 0.042, 0.004, 20, 0.007, wc, lambda P, T: P - HC, k=0.006)
     # apron sash bow at the back
     add_bow(Wf, (0, 0.085, 0.395), 0.045, (0, 1, 0), wc)
-    return Wf
+    return Wf, Wl, Wh
 
 
 def sculpt_fins():
@@ -439,8 +450,12 @@ def build(out_path, with_anims=True):
         core.add_modifier(objs['hair'], 'DECIMATE', ratio=30000 / tris, use_collapse_triangulate=True)
         core.apply_modifiers(objs['hair'])
     objs['skin'] = realize(sculpt_skin(), 'skin', M['skin'], voxel=0.0022, target=9000, cav=0.15)
-    objs['dress'] = realize(sculpt_dress(), 'dress', M['dress'], voxel=0.0024, target=9000, cav=0.35)
-    objs['white'] = realize(sculpt_white(), 'white', M['white'], voxel=0.0022, target=16000, cav=0.4)
+    dress_field = sculpt_dress()
+    objs['dress'] = realize(dress_field, 'dress', M['dress'], voxel=0.0024, target=9000, cav=0.35)
+    wb, wl, wh = sculpt_white()
+    objs['white'] = realize(wb, 'white', M['white'], voxel=0.0022, target=10000, cav=0.4)
+    objs['white_limbs'] = realize(wl, 'white_limbs', M['white'], voxel=0.0018, target=3000, cav=0.3)
+    objs['white_head'] = realize(wh, 'white_head', M['white'], voxel=0.002, target=5000, cav=0.35)
     objs['fins'] = realize(sculpt_fins(), 'fins', M['fin'], voxel=0.002, target=3000, cav=0.3)
     objs['tail'] = realize(sculpt_tail(), 'tail', M['tail'], voxel=0.0025, target=4000, post=tail_post, cav=0.2)
     objs['shoes'] = realize(sculpt_shoes(), 'shoes', M['shoe'], voxel=0.002, target=2500, cav=0.2)
@@ -461,7 +476,7 @@ def build(out_path, with_anims=True):
                                     F.decal('blushL', bvh, (0.093, -0.3, 0.602), (0.07, 0.042), (0, 2), M['face'], mirror=True, offset=0.0008)], 'face_blush')
     objs['emblem'] = F.decal('emblem', F.surface_bvh(objs['white']), (0, -0.4, 0.33), (0.075, 0.075), (2, 2), M['face'], offset=0.0012)
 
-    arm = rig(objs)
+    arm = rig(objs, dress_field.parts)
     if with_anims:
         from . import bluefish_anims
         bluefish_anims.add(arm)
@@ -472,7 +487,7 @@ def build(out_path, with_anims=True):
 
 # ----------------------------------------------------------------------------- rig
 
-def rig(objs):
+def rig(objs, dress_parts):
     tp = [np.array(p) for p in TAIL_PATH]
     bones = [
         ('root', (0, 0, 0), (0, 0, 0.08), None),
@@ -564,17 +579,19 @@ def rig(objs):
         wts[f'lowerleg.{s}'] = side * cw[f'lowerleg.{s}']
     core.bind(objs['skin'], arm, {k: v.astype(float) for k, v in wts.items()})
 
-    # dress: torso/skirt on the spine, sleeves on the arms, skirt hem pulled a little by the thighs
+    # dress: torso/skirt on the spine, sleeves on the arms (decided by which sculpt part is nearest),
+    # skirt hem pulled a little by the thighs
     co = core.verts_of(objs['dress'])
-    arml = {s: (np.minimum(dist_to(co, f'upperarm.{s}'), dist_to(co, f'lowerarm.{s}')) < 0.045) & (np.abs(co[:, 0]) > 0.055) & (co[:, 2] > 0.33)
-            for s in ('L', 'R')}
+    P = co.astype(np.float32)
+    dist = {k: np.min(np.stack([f(P) for f in fs]), axis=0) for k, fs in dress_parts.items()}
+    arml = {s: (dist[f'sleeve.{s}'] < dist['body']) for s in ('L', 'R')}
     wd = {}
     for s in ('L', 'R'):
         cw = core.chain_weights(co, segs, [f'upperarm.{s}', f'lowerarm.{s}'], blend=0.3)
-        m = arml[s] & (np.sign(co[:, 0]) == (1 if s == 'L' else -1))
-        wd[f'upperarm.{s}'] = m * cw[f'upperarm.{s}']
-        wd[f'lowerarm.{s}'] = m * cw[f'lowerarm.{s}']
-    body = ~(arml['L'] | arml['R'])
+        blend_in = smoothstep(0.0, 0.012, dist['body'] - dist[f'sleeve.{s}'])
+        wd[f'upperarm.{s}'] = arml[s] * cw[f'upperarm.{s}'] * blend_in
+        wd[f'lowerarm.{s}'] = arml[s] * cw[f'lowerarm.{s}'] * blend_in
+    body = 1 - (wd['upperarm.L'] + wd['lowerarm.L'] + wd['upperarm.R'] + wd['lowerarm.R'])
     kleg = np.clip((0.3 - co[:, 2]) / 0.1, 0, 1) * 0.3
     wd['chest'] = body * smoothstep(0.43, 0.47, co[:, 2])
     wd['spine'] = body * smoothstep(0.38, 0.42, co[:, 2]) * (1 - smoothstep(0.43, 0.47, co[:, 2]))
@@ -584,24 +601,17 @@ def rig(objs):
     wd['upperleg.R'] = hipw * kleg * (co[:, 0] <= 0)
     core.bind(objs['dress'], arm, {k: v.astype(float) for k, v in wd.items()})
 
-    # white parts: headdress with the head, cuffs with hands, sock frills with shins, the rest on the body
+    # white parts: apron/petticoat on the body, headdress on the head, cuffs/socks on the limbs
     co = core.verts_of(objs['white'])
-    ww = {}
-    headp = co[:, 2] > 0.6
-    cuffs = (~headp) & (co[:, 2] > 0.3) & (co[:, 2] < 0.38) & (np.abs(co[:, 0]) > 0.1)
-    socks = co[:, 2] < 0.13
-    rest = ~(headp | cuffs | socks)
-    ww['head'] = headp
-    ww['lowerarm.L'] = cuffs & (co[:, 0] > 0)
-    ww['lowerarm.R'] = cuffs & (co[:, 0] < 0)
-    ww['lowerleg.L'] = socks & (co[:, 0] > 0)
-    ww['lowerleg.R'] = socks & (co[:, 0] <= 0)
     kleg = np.clip((0.3 - co[:, 2]) / 0.1, 0, 1) * 0.3
-    ww['chest'] = rest & (co[:, 2] > 0.45)
-    ww['hips'] = (rest & (co[:, 2] <= 0.45)) * (1 - kleg)
-    ww['upperleg.L'] = (rest & (co[:, 2] <= 0.45)) * kleg * (co[:, 0] > 0)
-    ww['upperleg.R'] = (rest & (co[:, 2] <= 0.45)) * kleg * (co[:, 0] <= 0)
-    core.bind(objs['white'], arm, {k: np.asarray(v, dtype=float) for k, v in ww.items()})
+    upper = co[:, 2] > 0.45
+    core.bind(objs['white'], arm, {'chest': upper.astype(float), 'hips': (~upper) * (1 - kleg),
+                                   'upperleg.L': (~upper) * kleg * (co[:, 0] > 0), 'upperleg.R': (~upper) * kleg * (co[:, 0] <= 0)})
+    rigid(objs['white_head'], 'head')
+    co = core.verts_of(objs['white_limbs'])
+    cuff = co[:, 2] > 0.2
+    core.bind(objs['white_limbs'], arm, {'lowerarm.L': (cuff & (co[:, 0] > 0)).astype(float), 'lowerarm.R': (cuff & (co[:, 0] <= 0)).astype(float),
+                                         'lowerleg.L': (~cuff & (co[:, 0] > 0)).astype(float), 'lowerleg.R': (~cuff & (co[:, 0] <= 0)).astype(float)})
 
     # accents: head bows with head, skirt bows with hips, sleeve buttons with arms
     co = core.verts_of(objs['accents'])
