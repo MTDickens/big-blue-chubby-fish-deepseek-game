@@ -1,6 +1,7 @@
 // Backdrops and light rigs: realistic photo panoramas (Poly Haven, CC0) around anime characters.
 import * as THREE from 'three';
 import { GroundedSkybox } from 'three/addons/objects/GroundedSkybox.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 export const STAGES = {
   studio: {
@@ -109,7 +110,9 @@ export class Stage {
     }
     if (!s.file) {
       scene.background = this.studioBg;
-      scene.environment = null;
+      if (!this.roomEnv) this.roomEnv = this.pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      scene.environment = this.roomEnv;
+      scene.environmentIntensity = 0.55;
       this.stand.visible = true;
       this.shadowPlane.position.y = 0.0005;
       this.shadowPlane.material.opacity = 0.28;

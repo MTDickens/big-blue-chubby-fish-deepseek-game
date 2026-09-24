@@ -1,9 +1,9 @@
-"""蓝色大肥鱼 — the chibi maid whale girl (main character).
+"""蓝色大肥鱼 — chibi maid whale girl, sculpted with signed distance fields for a soft figure look.
 
-Built procedurally from the video references (EP1 beach ending / overpass / EP2 close-up):
-~0.9 m tall, ~2.5 heads, navy->sky-blue wavy hair with an ahoge, white ruffled maid headband with
-light-blue bows, navy whale-fin ears with white fluff, navy maid dress + white apron with a whale
-emblem, white frilled socks, navy Mary Janes, and a big navy whale tail with a pale underside.
+References (EP1 1.7s / 19.7s / 31.7s, EP2 32.2s): ~2.2 heads tall, big fluffy navy->sky-blue wavy
+hair with an ahoge, white ruffled maid headdress with light-blue bows, navy whale-fin ears with white
+fluff, navy maid dress, white apron with a whale emblem, layered white petticoat, white frilled
+socks, glossy navy Mary Janes, and a thick navy whale tail with a pale belly and upright fluke.
 """
 import math
 import os
@@ -11,152 +11,405 @@ import os
 import bpy  # noqa: F401
 import numpy as np
 
-from .. import core, face as F, shapes as S
+from .. import core, face as F, sdf, shapes as S
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEX = os.path.normpath(os.path.join(HERE, '..', 'textures', 'face_bluefish.png'))
 
-P = dict(
-    skin='#fddccb', skin_shade='#f1ae9f', skin_line='#c98476',
-    hair_root='#1f3272', hair_mid='#2b4f9f', hair_tip='#5192dc', hair_inner='#142050',
-    dress='#1c2654', dress_band='#2b3b78', dress_shade='#0c1233',
-    white='#f7f8fd', white_shade='#c3cbe6', white_line='#8e98c0',
-    fin='#1d2c62', fin_shade='#0c1438',
-    tail_top='#1d2e66', tail_under='#cbd6ee',
-    shoe='#1b2349', gold='#e3b44f', bow='#4f93ea', silver='#dde2ee',
+
+def lin(h):
+    return np.array(core.hexc(h)[:3], dtype=np.float32)
+
+
+C = dict(
+    skin=lin('#fcdcca'), blush=lin('#f7b2aa'), sock=lin('#f6f7fc'),
+    hair_root=lin('#1c2b64'), hair_mid=lin('#264693'), hair_tip=lin('#5a9fe6'),
+    dress=lin('#1b2551'), dress_band=lin('#27377a'), gold=lin('#e2b24c'),
+    white=lin('#f7f8fd'), fin=lin('#1d2b62'), tail_top=lin('#1d2e67'), tail_under=lin('#d2dcf0'),
+    shoe=lin('#1b2349'), bow=lin('#5a9bee'), bow_white=lin('#f4f7ff'), silver=lin('#e3e7f1'),
 )
 
-HEAD_C = np.array([0.0, 0.0, 0.715])
-HEAD_R = np.array([0.150, 0.142, 0.150])
+HC = np.array([0.0, 0.0, 0.665], dtype=np.float32)   # head center
+HR = np.array([0.152, 0.146, 0.152], dtype=np.float32)
+EYE_Z = 0.628
 
-
-# ----------------------------------------------------------------------------- helpers
 
 def smoothstep(a, b, x):
-    t = np.clip((np.asarray(x, dtype=float) - a) / (b - a), 0, 1)
+    t = np.clip((np.asarray(x, dtype=np.float32) - a) / (b - a), 0, 1)
     return t * t * (3 - 2 * t)
 
 
-def mix(a, b, t):
-    return np.asarray(a) * (1 - t) + np.asarray(b) * t
-
-
-def lin(h):
-    return np.array(core.hexc(h)[:3])
-
-
 def head_dir(az, el):
-    """az: 0 = front (-Y), 90 = character's left (+X); el: 0 = equator, 90 = top."""
     a, e = math.radians(az), math.radians(el)
-    return np.array([math.sin(a) * math.cos(e), -math.cos(a) * math.cos(e), math.sin(e)])
+    return np.array([math.sin(a) * math.cos(e), -math.cos(a) * math.cos(e), math.sin(e)], dtype=np.float32)
 
 
-def head_pt(az, el, off=0.0, radii=HEAD_R, center=HEAD_C):
+def head_pt(az, el, off=0.0):
     d = head_dir(az, el)
-    r = 1.0 / math.sqrt((d[0] / radii[0]) ** 2 + (d[1] / radii[1]) ** 2 + (d[2] / radii[2]) ** 2)
-    return center + d * (r + off)
+    r = 1.0 / math.sqrt((d[0] / HR[0]) ** 2 + (d[1] / HR[1]) ** 2 + (d[2] / HR[2]) ** 2)
+    return HC + d * (r + off)
 
 
-def width_profile(w, root=0.75, peak=0.3, tip_start=0.55, blunt=0.0):
-    def f(s):
-        s = np.asarray(s, dtype=float)
-        grow = root + (1 - root) * smoothstep(0, peak, s)
-        taper = (1 - smoothstep(tip_start, 1.0, s)) ** 0.9
-        return w * grow * (blunt + (1 - blunt) * taper) + 1e-4
-    return f
-
-
-def clump(path, w, th, n=22, up=None, prof=None, tip=True, root=0.75, tip_start=0.55, twist=0.0, blunt=0.0):
-    prof = S.prof_lens(8, 0.8) if prof is None else prof
-    if up is None:
-        p0 = np.asarray(path[0], dtype=float)
-        up = (p0 - HEAD_C) / np.linalg.norm(p0 - HEAD_C)
-    return S.sweep(path, n=n, profile=prof, width=width_profile(w, root, 0.3, tip_start, blunt),
-                   thick=width_profile(th, 0.9, 0.3, min(tip_start + 0.1, 0.95), blunt), up=up, tip1=tip, cap0=True, twist=twist)
-
-
-def ruffle_ring(center_z, r_in, r_out, drop, pleats, amp, n=None, z_axis=None, thick=0.003, name='ruffle', mat=None):
-    """Horizontal gathered ruffle (collars, petticoats): annulus from r_in to r_out, dropping by `drop`."""
-    n = n or pleats * 5
-    th = np.linspace(0, 2 * np.pi, n, endpoint=False)
-    rows = 4
-    verts, uvs = [], []
-    for j in range(rows):
-        v = j / (rows - 1)
-        for k in range(n):
-            r = r_in + (r_out - r_in) * v
-            r *= 1 + amp * v * math.sin(pleats * th[k])
-            z = center_z - drop * v ** 1.3 + amp * 0.3 * v * math.cos(pleats * th[k]) * r_out
-            verts.append((r * math.cos(th[k]), r * math.sin(th[k]), z))
-            uvs.append((k / n, v))
-    faces = []
-    for j in range(rows - 1):
-        for k in range(n):
-            a = j * n + k
-            b = j * n + (k + 1) % n
-            faces.append((a, b, b + n, a + n))
-    o = S.obj(name, (np.array(verts), faces, np.array(uvs)), mat)
-    return core.solidify(o, thick, 0.0)
-
-
-def pleated_strip(path_pts, n, height, pleats, amp, up_fn, thick=0.0025, name='frill', mat=None, edge_wave=0.12, closed=False):
-    """A gathered frill standing out from a path. up_fn(P, T) -> outward direction per sample."""
-    P = S.catmull_rom(path_pts, n, closed=closed)
-    T = np.gradient(P, axis=0)
-    T /= np.linalg.norm(T, axis=1, keepdims=True)
-    rows = 3
-    verts, uvs = [], []
+def ruffle(field, center, radius, n, size, col, theta=None, phase=0.0, k=None, tilt=0.0):
+    """Gathered ruffle around a horizontal circle: overlapping flattened ellipsoids."""
+    rad, hei, tang = size
+    t0, t1 = theta if theta else (0, 2 * math.pi)
     for i in range(n):
-        s = i / (n - 1 if not closed else n)
-        out = np.asarray(up_fn(P[i], T[i]), dtype=float)
-        out = out - (out @ T[i]) * T[i]
-        out /= np.linalg.norm(out)
-        side = np.cross(T[i], out)
-        hmax = height * (1 + edge_wave * math.cos(2 * math.pi * pleats * s))
-        for j in range(rows):
-            v = j / (rows - 1)
-            p = P[i] + out * (hmax * v) + side * (amp * math.sin(2 * math.pi * pleats * s) * (0.35 + 0.65 * v))
-            verts.append(p)
-            uvs.append((s, v))
-    faces = []
-    rng = range(n) if closed else range(n - 1)
-    for i in rng:
-        for j in range(rows - 1):
-            a = i * rows + j
-            b = ((i + 1) % n) * rows + j
-            faces.append((a, b, b + 1, a + 1))
-    o = S.obj(name, (np.array(verts), faces, np.array(uvs)), mat, fix_normals=False)
-    return core.solidify(o, thick, 0.0)
+        a = t0 + (t1 - t0) * (i / n if theta is None else i / max(n - 1, 1)) + phase
+        p = (center[0] + radius * math.cos(a), center[1] + radius * math.sin(a), center[2])
+        field.add(sdf.ellipsoid(p, (rad, tang, hei), rot=(0, tilt, math.degrees(a))), col, k=k if k is not None else rad * 0.9)
 
 
-def bow(center, size, mat, knot_mat=None, facing=(0, -1, 0), roll=0.0, tails=True, name='bow'):
-    """Ribbon bow in the plane facing `facing`."""
-    f = np.asarray(facing, dtype=float)
+def ring(center, radius, n, r, axis_z=True, phase=0.0, squash_y=1.0, theta=None, z_wave=0.0):
+    """Points around a horizontal circle (for scalloped frills made of spheres)."""
+    pts = []
+    t0, t1 = theta if theta else (0, 2 * math.pi)
+    full = theta is None
+    for i in range(n):
+        a = t0 + (t1 - t0) * (i / n if full else i / max(n - 1, 1)) + phase
+        pts.append(np.array([center[0] + radius * math.cos(a), center[1] + radius * math.sin(a) * squash_y,
+                             center[2] + z_wave * math.sin(3 * a)], dtype=np.float32))
+    return pts
+
+
+def add_bow(field, center, size, facing, col, knot_col=None, tails=True, roll=0.0):
+    """Ribbon bow: two flat looped ribbons, a knot and two tails, facing `facing`."""
+    f = np.asarray(facing, dtype=np.float32)
     f /= np.linalg.norm(f)
-    upv = np.array([0, 0, 1.0])
-    right = np.cross(f, upv)
+    up = np.array([0, 0, 1.0], dtype=np.float32)
+    right = np.cross(f, up)
     if np.linalg.norm(right) < 1e-6:
-        right = np.array([1.0, 0, 0])
+        right = np.array([1.0, 0, 0], dtype=np.float32)
     right /= np.linalg.norm(right)
-    upv = np.cross(right, f)
-    c, s = math.cos(roll), math.sin(roll)
-    right, upv = right * c + upv * s, upv * c - right * s
-    C = np.asarray(center, dtype=float)
-    parts = []
+    up = np.cross(right, f)
+    c, s_ = math.cos(roll), math.sin(roll)
+    right, up = right * c + up * s_, up * c - right * s_
+    C0 = np.asarray(center, dtype=np.float32)
+    w = size * 0.2
+    t = size * 0.055
     for side in (-1, 1):
-        loop = [C + right * side * size * x + upv * size * y + f * size * z for x, y, z in
-                [(0.05, 0.05, 0), (0.45, 0.42, -0.04), (0.95, 0.36, -0.1), (1.0, -0.1, -0.1), (0.6, -0.34, -0.05), (0.08, -0.06, 0)]]
-        parts.append(S.sweep(loop, n=26, profile=S.prof_ribbon(10, 0.28), width=size * 0.2, thick=size * 0.06,
-                             up=f, closed=True))
+        loop = [C0 + right * side * size * x + up * size * y - f * size * z for x, y, z in
+                [(0.08, 0.06, 0.0), (0.45, 0.36, 0.05), (0.9, 0.3, 0.08), (0.98, -0.02, 0.08), (0.8, -0.3, 0.06), (0.4, -0.24, 0.03), (0.08, -0.04, 0.0)]]
+        field.ribbon(loop, [w * 0.6, w, w * 1.1, w * 1.1, w * 1.1, w, w * 0.6], t, col, k=size * 0.06, up=f, inner_k=0.002)
         if tails:
-            tail = [C + right * side * size * x + upv * size * y + f * size * 0.02 for x, y in
-                    [(0.05, -0.08), (0.22, -0.45), (0.38, -0.85)]]
-            parts.append(S.sweep(tail, n=10, profile=S.prof_ribbon(8, 0.25), width=[size * 0.14, size * 0.17],
-                                 thick=size * 0.05, up=f, cap0=True, cap1=True))
-    geo = S.merge_geos(*parts)
-    o = S.obj(name, geo, mat, fix_normals=False)
-    knot = S.obj(name + '_knot', S.transform_geo(S.sphere((size * 0.2, size * 0.14, size * 0.18), 16, 10), loc=C), knot_mat or mat)
-    return core.join([o, knot], name)
+            tail = [C0 + right * side * size * x + up * size * y for x, y in [(0.08, -0.1), (0.22, -0.5), (0.36, -0.92)]]
+            field.ribbon(tail, [w * 0.7, w * 0.85, w * 0.95], t, col, k=size * 0.05, up=f, inner_k=0.002)
+    field.add(sdf.ellipsoid(C0 + f * size * 0.04, (size * 0.16, size * 0.13, size * 0.17)), knot_col if knot_col is not None else col, k=size * 0.06)
+
+
+def _frame_rot(x, y, z, tilt=0.0):
+    """Euler (degrees) that maps local x,y,z axes onto the given world directions (approx via matrix->euler)."""
+    from mathutils import Matrix
+    x = x / np.linalg.norm(x)
+    zz = np.cross(x, y)
+    zz /= np.linalg.norm(zz)
+    yy = np.cross(zz, x)
+    M = Matrix(((x[0], yy[0], zz[0]), (x[1], yy[1], zz[1]), (x[2], yy[2], zz[2])))
+    e = M.to_euler('XYZ')
+    return (math.degrees(e.x), math.degrees(e.y) + tilt, math.degrees(e.z))
+
+
+# ----------------------------------------------------------------------------- mesh realization
+
+def realize(field, name, mat, voxel=0.0025, target=None, post=None, cav=0.35, cav_dist=0.008):
+    V, Fc, Col = field.mesh(voxel)
+    o = core.mesh_from_arrays(name, V, Fc, colors=Col, mat=mat)
+    me = o.data
+    N = np.empty(len(me.vertices) * 3, dtype=np.float32)
+    me.vertices.foreach_get('normal', N)
+    N = N.reshape(-1, 3)
+    if cav:
+        Col = Col * sdf.cavity(field.grid, V.astype(np.float32), N, dist=cav_dist, strength=cav)[:, None]
+    if post:
+        Col = post(V, N, Col)
+    core.paint(o, lambda co, c=Col: c)
+    tris = core.tri_count(o)
+    if target and tris > target:
+        core.add_modifier(o, 'DECIMATE', ratio=target / tris, use_collapse_triangulate=True)
+        core.apply_modifiers(o)
+    o.data.shade_smooth()
+    return o
+
+
+# ----------------------------------------------------------------------------- sculpt
+
+def hair_shell(axis_y=0.03, z_top=0.72, z_bot=0.36, phi_max=math.radians(112)):
+    """Thick bell-shaped mass behind/around the body that the locks sit on (no see-through gaps).
+    It wraps round the sides outside the arms, like the voluminous hair in the reference."""
+    def r_in(z):
+        return np.interp(z, [0.24, 0.45, 0.58, 0.66, 0.74], [0.2, 0.19, 0.16, 0.12, 0.08])
+
+    def r_out(z, phi):
+        base = np.interp(z, [0.3, 0.4, 0.5, 0.58, 0.64, 0.7, 0.76], [0.245, 0.245, 0.235, 0.215, 0.19, 0.16, 0.12])
+        edge = np.clip((np.abs(phi) - (phi_max - 0.5)) / 0.5, 0, 1)
+        return base + 0.012 * np.sin(10 * phi + 14 * z) - 0.07 * edge ** 2
+
+    def f(P):
+        x, y, z = P[..., 0], P[..., 1] - axis_y, P[..., 2]
+        rho = np.sqrt(x * x + y * y)
+        phi = np.arctan2(x, y)
+        dr = np.maximum(r_in(z) - rho, rho - r_out(z, phi))
+        zb = z_bot + 0.02 * np.cos(10 * phi + 0.5) + 0.03 * (np.abs(phi) / phi_max) ** 2
+        dz = np.maximum(zb - z, z - z_top)
+        q = np.stack([np.maximum(dr, 0), np.maximum(dz, 0)], axis=-1)
+        d = np.minimum(np.maximum(dr, dz), 0) + _n2(q)
+        return np.maximum(d, (np.abs(phi) - phi_max) * rho) - 0.006
+    return f, (np.array([-0.32, -0.3, z_bot - 0.05], dtype=np.float32), np.array([0.32, 0.34, z_top + 0.03], dtype=np.float32))
+
+
+def _n2(q):
+    return np.sqrt(np.einsum('...i,...i->...', q, q))
+
+
+def sculpt_hair():
+    """Smooth sculpted base (scalp volume + hidden filler behind the back); visible locks are swept."""
+    H = sdf.Field('hair')
+    col = C['hair_mid']
+    H.add(sdf.ellipsoid(HC + np.array([0, 0.016, 0.02]), HR + np.array([0.028, 0.03, 0.026])), col, k=0.01)
+    H.carve(sdf.ellipsoid(np.array([0, -0.21, 0.59]), (0.122, 0.14, 0.118)), k=0.022)
+    H.add(hair_shell(), col, k=0.05)
+    ah = [(0.0, 0.03, 0.845), (0.004, 0.012, 0.905), (0.0, -0.032, 0.95), (-0.004, -0.074, 0.94), (-0.002, -0.082, 0.91)]
+    H.tube([np.array(p, dtype=np.float32) for p in ah], [0.01, 0.009, 0.008, 0.006, 0.003], col, k=0.004)
+    return H
+
+
+LENS = None
+
+
+def lock(path, w, th_ratio=0.42, n=30, up=(0, 0, 1), root=0.75, tip_start=0.72):
+    """A swept anime hair lock: lens cross-section (thin edges), full body, sharp tapered tip."""
+    global LENS
+    if LENS is None:
+        a = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+        LENS = np.stack([np.cos(a), np.sin(a) * (0.35 + 0.65 * np.abs(np.sin(a)))], axis=1)
+
+    def wf(s):
+        s = np.asarray(s, dtype=float)
+        g = root + (1 - root) * np.clip(s / 0.2, 0, 1)
+        t = np.clip((s - tip_start) / (1 - tip_start), 0, 1)
+        return w * g * (1 - t ** 1.6) + 2e-4
+    return S.sweep(path, n=n, profile=LENS, width=wf, thick=lambda s: wf(s) * th_ratio, up=up, tip1=True, cap0=True)
+
+
+def hair_locks():
+    geos = []
+    rng = np.random.default_rng(21)
+    # bangs: crisp locks from the crown down to the eyelids, covering the forehead
+    bangs = [(-84, -90, 8, 0.03), (-70, -76, 12, 0.032), (-56, -61, 5, 0.034), (-42, -45, 11, 0.034), (-28, -30, 3, 0.034),
+             (-14, -14, 9, 0.032), (-3, -1, -2, 0.026), (8, 10, 8, 0.032), (21, 24, 2, 0.034), (35, 40, 10, 0.034),
+             (49, 55, 4, 0.034), (63, 69, 11, 0.032), (77, 83, 6, 0.03), (90, 94, 10, 0.028)]
+    for azr, azt, elt, w in bangs:
+        pts = [head_pt(azr + (azt - azr) * t ** 1.3, 66 + (elt - 66) * t ** 0.8, off=0.026 + 0.01 * math.sin(math.pi * t) - 0.008 * t)
+               for t in np.linspace(0, 1, 6)]
+        tip = pts[-1] + head_dir(azt, elt - 30) * 0.016 - head_dir(azt, elt) * 0.006
+        geos.append(lock(pts + [tip], w, 0.42, n=20, up=head_dir(azr, 55), root=0.9, tip_start=0.62))
+    # side hair: frames the face and falls in front of the shoulders in soft waves
+    for side in (-1, 1):
+        for k, (azr, zend, xo, yo, w) in enumerate([(62, 0.41, -0.012, -0.004, 0.028), (78, 0.37, 0.03, 0.02, 0.034), (94, 0.35, 0.07, 0.05, 0.038)]):
+            p = [head_pt(side * azr, 38, 0.024), head_pt(side * (azr + 2), 8, 0.03), head_pt(side * (azr + 4), -20, 0.032)]
+            b = p[-1]
+            p += [np.array([side * (0.19 + xo), b[1] + yo * 0.5 - 0.004, 0.535]), np.array([side * (0.218 + xo), b[1] + yo, 0.48]),
+                  np.array([side * (0.203 + xo), b[1] + yo, 0.43]), np.array([side * (0.23 + xo), b[1] + yo, zend + 0.02]),
+                  np.array([side * (0.214 + xo), b[1] + yo - 0.008, zend])]
+            geos.append(lock(p, w, 0.45, n=34, up=head_dir(side * azr, 10), tip_start=0.78))
+    # long wavy back locks, two layers; the outer layer makes the silhouette
+    for layer, (az_list, spread0, wbase) in enumerate([(np.linspace(118, 242, 9), -0.02, 0.05),
+                                                       (list(np.linspace(112, 248, 13)) + [s * a for s in (-1, 1) for a in (94, 104)], 0.0, 0.044)]):
+        for i, az in enumerate(az_list):
+            azr = az % 360
+            side = math.sin(math.radians(azr))
+            sidek = 1.0 if (azr < 108 or azr > 252) else 0.0
+            pts = [head_pt(azr, el, off=-0.004 + layer * 0.004 + 0.028 * (22 - el) / 22) for el in (22, 11, 0)]
+            base = pts[-1]
+            radial = np.array([base[0], base[1] - 0.03, 0.0], dtype=np.float32)
+            radial /= np.linalg.norm(radial)
+            tangent = np.cross(np.array([0, 0, 1.0], dtype=np.float32), radial)
+            z_end = 0.24 + 0.05 * abs(side) + rng.uniform(-0.02, 0.02) + layer * 0.0
+            zs = np.linspace(base[2] - 0.045, z_end, 9)
+            ph = 1.2 * i + rng.uniform(0, 0.8) + layer * 0.9
+            amp = 0.026 + rng.uniform(0, 0.012)
+            r0 = float(np.linalg.norm(base[:2] - np.array([0, 0.03])))
+            for kk, z in enumerate(zs):
+                t = (kk + 1) / len(zs)
+                spread = float(np.interp(z, [0.24, 0.32, 0.42, 0.52, 0.6], [0.315, 0.3, 0.278, 0.255, 0.232])) + spread0 + layer * 0.012
+                rho = max(spread + sidek * 0.035 * t, r0 + 0.004 * kk) + 0.01 * math.cos(ph + t * 8.0)
+                q = np.array([0, 0.03, 0], dtype=np.float32) + radial * rho + tangent * amp * math.sin(ph + t * 8.0)
+                q[2] = z
+                pts.append(q)
+            last = pts[-1]
+            curl = 1 if (i + layer) % 2 else -1
+            pts.append(last + tangent * 0.02 * curl + radial * 0.016 + np.array([0, 0, 0.004], dtype=np.float32))
+            pts.append(last + tangent * 0.03 * curl + radial * 0.03 + np.array([0, 0, 0.02], dtype=np.float32))
+            w = wbase + rng.uniform(-0.004, 0.006)
+            geos.append(lock(pts, w, 0.4, n=34, up=radial, root=0.25, tip_start=0.78))
+    return geos
+
+
+def hair_post(V, N, col):
+    z = V[:, 2]
+    a = smoothstep(0.66, 0.46, z)[:, None]
+    b = smoothstep(0.47, 0.27, z)[:, None]
+    c = C['hair_root'] * (1 - a) + C['hair_mid'] * a
+    c = c * (1 - b) + C['hair_tip'] * b
+    # keep cavity darkening from the sculpt
+    shade = col / np.maximum(C['hair_mid'], 1e-4)
+    return c * np.clip(shade.mean(axis=1, keepdims=True), 0.3, 1.0)
+
+
+def sculpt_skin():
+    K = sdf.Field('skin')
+    sk = C['skin']
+    K.add(sdf.ellipsoid(HC, HR), sk, k=0.0)
+    for s in (-1, 1):   # round, full cheeks
+        K.add(sdf.sphere((s * 0.064, -0.074, 0.588), 0.07), sk, k=0.05)
+    K.add(sdf.sphere((0, -0.088, 0.55), 0.036), sk, k=0.05)   # small soft chin
+    K.add(sdf.round_cone((0, 0.004, 0.47), (0, 0.006, 0.56), 0.03, 0.028), sk, k=0.01)  # neck
+    for s in (-1, 1):
+        x = s * 0.047
+        K.add(sdf.round_cone((x, 0.0, 0.29), (x * 1.02, -0.004, 0.16), 0.037, 0.033), sk, k=0.004)
+        K.add(sdf.round_cone((x * 1.02, -0.004, 0.16), (x * 1.03, 0.0, 0.075), 0.033, 0.029), sk, k=0.012)
+        K.paint(sdf.ellipsoid((x * 1.03, 0.0, 0.07), (0.05, 0.05, 0.035)), C['sock'], k=0.004)   # socks
+        # mitten hands (arms are slightly bent forward, hands near the skirt sides)
+        hc = np.array([s * 0.14, -0.05, 0.325], dtype=np.float32)
+        K.add(sdf.ellipsoid(hc, (0.021, 0.019, 0.026), rot=(15, s * 20, 0)), sk, k=0.0)
+        K.add(sdf.ellipsoid(hc + np.array([-s * 0.013, -0.012, 0.006], dtype=np.float32), (0.008, 0.008, 0.012), rot=(20, 0, s * 20)), sk, k=0.006)
+    return K
+
+
+def sculpt_dress():
+    D = sdf.Field('dress')
+    dc = C['dress']
+    torso = [(0, 0.36), (0.066, 0.36), (0.073, 0.40), (0.072, 0.44), (0.066, 0.475), (0.05, 0.498), (0.03, 0.51), (0, 0.51)]
+    D.add(sdf.lathe(torso, squash_y=0.82), dc, k=0.0)
+
+    def folds(th, z):
+        t = np.clip((0.40 - z) / 0.2, 0, 1)
+        return 1 + (0.03 * np.sin(th * 9) + 0.012 * np.sin(th * 4 + 1)) * t ** 1.3
+    skirt = [(0, 0.405), (0.074, 0.405), (0.1, 0.385), (0.135, 0.34), (0.162, 0.29), (0.178, 0.245), (0.184, 0.21), (0.176, 0.198), (0, 0.198)]
+    D.add(sdf.lathe(skirt, mod=folds), dc, k=0.012)
+    D.paint(sdf.lathe([(0, 0.19), (0.3, 0.19), (0.3, 0.232), (0, 0.232)]), C['dress_band'], k=0.004)
+    D.paint(sdf.torus((0, 0, 0.236), 0.176, 0.0025), C['gold'], k=0.0015)
+    # puffy sleeves, arms relaxed and a little forward
+    for s in (-1, 1):
+        sh = np.array([s * 0.066, 0.0, 0.482], dtype=np.float32)
+        el = np.array([s * 0.112, -0.022, 0.405], dtype=np.float32)
+        wr = np.array([s * 0.132, -0.042, 0.35], dtype=np.float32)
+        D.add(sdf.round_cone(sh, el, 0.037, 0.028), dc, k=0.014)
+        D.add(sdf.round_cone(el, wr, 0.027, 0.03), dc, k=0.006)
+    # neck bow (navy) with a silver button
+    add_bow(D, (0, -0.064, 0.49), 0.03, (0, -1, 0), dc, knot_col=C['silver'])
+    return D
+
+
+def sculpt_white():
+    Wf = sdf.Field('white')
+    wc = C['white']
+    down = lambda P, T: np.array([P[0] * 0.25, P[1] * 0.25, -1.0])
+    out_h = lambda P, T: np.array([P[0], P[1], 0.0])
+    # collar: gathered frill around the neck, falling outward
+    sdf.frill(Wf, [np.array((0.046 * math.cos(a), 0.046 * math.sin(a) * 0.9, 0.508), dtype=np.float32) for a in np.linspace(0, 2 * math.pi, 16, endpoint=False)],
+              0.026, 0.004, 13, 0.004, wc, lambda P, T: np.array([P[0], P[1], -0.6]), closed=True, k=0.006)
+    # apron bib with frilled edges
+    Wf.add(sdf.rounded_box((0, -0.052, 0.442), (0.046, 0.012, 0.044), 0.01), wc, k=0.0)
+    for sd in (-1, 1):
+        path = [np.array((sd * 0.047, -0.058 + 0.012 * (z - 0.4), z), dtype=np.float32) for z in np.linspace(0.4, 0.495, 5)]
+        sdf.frill(Wf, path, 0.022, 0.0035, 5, 0.003, wc, lambda P, T, sd=sd: np.array([sd * 1.0, 0.25, 0.0]), k=0.006)
+    # apron panel over the skirt front, with a gathered hem frill
+    apron_prof = [(0.075, 0.405), (0.103, 0.382), (0.138, 0.336), (0.158, 0.296), (0.165, 0.28), (0.172, 0.28),
+                  (0.165, 0.296), (0.145, 0.336), (0.11, 0.382), (0.082, 0.405)]
+    wedge = (-math.pi / 2 - 0.95, -math.pi / 2 + 0.95)
+    Wf.add(sdf.lathe(apron_prof, theta=wedge, mod=lambda th, z: 1 + (0.03 * np.sin(th * 9)) * np.clip((0.40 - z) / 0.2, 0, 1) ** 1.3), wc, k=0.0)
+    hem = [np.array((0.172 * math.cos(a), 0.172 * math.sin(a), 0.284), dtype=np.float32) for a in np.linspace(wedge[0] - 0.05, wedge[1] + 0.05, 12)]
+    sdf.frill(Wf, hem, 0.034, 0.004, 12, 0.006, wc, lambda P, T: np.array([P[0] * 0.5, P[1] * 0.5, -1.0]), k=0.008)
+    for sd in (-1, 1):
+        a = -math.pi / 2 + sd * 0.95
+        path = [np.array((r * math.cos(a) * 1.04, r * math.sin(a) * 1.04, z), dtype=np.float32) for r, z in apron_prof[:5]]
+        sdf.frill(Wf, path, 0.02, 0.0035, 5, 0.004, wc, lambda P, T, a=a, sd=sd: np.array([-math.sin(a) * sd, math.cos(a) * sd, 0.0]), k=0.006)
+    # layered petticoat: two gathered frills below the skirt hem
+    ring1 = [np.array((0.183 * math.cos(a), 0.183 * math.sin(a), 0.212), dtype=np.float32) for a in np.linspace(0, 2 * math.pi, 24, endpoint=False)]
+    sdf.frill(Wf, ring1, 0.05, 0.005, 28, 0.009, wc, lambda P, T: np.array([P[0] * 0.35, P[1] * 0.35, -1.0]), closed=True, k=0.01)
+    ring2 = [np.array((0.172 * math.cos(a), 0.172 * math.sin(a), 0.178), dtype=np.float32) for a in np.linspace(0, 2 * math.pi, 24, endpoint=False)]
+    sdf.frill(Wf, ring2, 0.036, 0.0045, 30, 0.008, wc, lambda P, T: np.array([P[0] * 0.45, P[1] * 0.45, -1.0]), closed=True, k=0.01)
+    # cuffs and sock frills
+    for sd in (-1, 1):
+        wr = np.array([sd * 0.134, -0.044, 0.346], dtype=np.float32)
+        cuff = [wr + np.array((0.03 * math.cos(a), 0.024 * math.sin(a), 0.004 * math.sin(a)), dtype=np.float32) for a in np.linspace(0, 2 * math.pi, 10, endpoint=False)]
+        sdf.frill(Wf, cuff, 0.018, 0.0035, 9, 0.004, wc, lambda P, T, wr=wr: (P - wr) * np.array([1, 1, 0]) + np.array([0, 0, -0.012]), closed=True, k=0.006)
+        sock = [np.array((sd * 0.048 + 0.03 * math.cos(a), 0.03 * math.sin(a), 0.108), dtype=np.float32) for a in np.linspace(0, 2 * math.pi, 10, endpoint=False)]
+        sdf.frill(Wf, sock, 0.02, 0.0035, 10, 0.004, wc, lambda P, T, sd=sd: np.array([P[0] - sd * 0.048, P[1], 0.9]), closed=True, k=0.006)
+    # maid headdress: band + gathered lace arching over the crown (tilted forward)
+    tilt = math.radians(24)
+    arc = []
+    for t in np.linspace(-1, 1, 21):
+        a = t * math.radians(98)
+        d = np.array([math.sin(a), -math.sin(tilt) * math.cos(a), math.cos(a) * math.cos(tilt)], dtype=np.float32)
+        r = 1.0 / math.sqrt((d[0] / (HR[0] + 0.046)) ** 2 + (d[1] / (HR[1] + 0.046)) ** 2 + (d[2] / (HR[2] + 0.04)) ** 2)
+        arc.append(HC + np.array([0, 0.016, 0.02], dtype=np.float32) + d * r)
+    Wf.ribbon(arc, 0.012, 0.006, wc, k=0.004, up=np.array([0, -math.cos(tilt), -math.sin(tilt)], dtype=np.float32))
+    sdf.frill(Wf, arc, 0.042, 0.004, 20, 0.007, wc, lambda P, T: P - HC, k=0.006)
+    # apron sash bow at the back
+    add_bow(Wf, (0, 0.085, 0.395), 0.045, (0, 1, 0), wc)
+    return Wf
+
+
+def sculpt_fins():
+    Fi = sdf.Field('fins')
+    outline = [(0.0, 0.034), (0.05, 0.05), (0.1, 0.046), (0.142, 0.03), (0.168, 0.006), (0.162, -0.016),
+               (0.12, -0.03), (0.07, -0.038), (0.026, -0.042), (0.0, -0.038)]
+    fluff = [(0.004, -0.036), (0.05, -0.042), (0.1, -0.036), (0.145, -0.02), (0.165, -0.004),
+             (0.14, -0.006), (0.1, -0.014), (0.05, -0.016), (0.006, -0.012)]
+    for s in (-1, 1):
+        o = np.array([s * 0.165, -0.006, 0.64], dtype=np.float32)
+        u = np.array([s * 1.0, 0.18, -0.24], dtype=np.float32)
+        v = np.array([0.0, 0.05, 1.0], dtype=np.float32)
+        Fi.add(sdf.slab(outline, 0.024, o, u, v, round_r=0.009), C['fin'], k=0.0)
+        uu = u / np.linalg.norm(u)
+        n = np.cross(uu, v / np.linalg.norm(v))
+        Fi.add(sdf.slab(fluff, 0.02, o - n * 0.002 + np.array([0, 0, -0.004], dtype=np.float32), u, v, round_r=0.009), C['white'], k=0.006)
+    return Fi
+
+
+TAIL_PATH = [(0.0, 0.066, 0.33), (0.08, 0.14, 0.26), (0.18, 0.165, 0.19), (0.28, 0.135, 0.15), (0.36, 0.085, 0.15), (0.42, 0.045, 0.18)]
+
+
+def sculpt_tail():
+    T = sdf.Field('tail')
+    pts = [np.array(p, dtype=np.float32) for p in TAIL_PATH]
+    T.tube(pts, [0.07, 0.064, 0.052, 0.04, 0.028, 0.019], C['tail_top'], k=0.0)
+    end = pts[-1]
+    d = end - pts[-2]
+    d /= np.linalg.norm(d)
+    outline = [(-0.01, 0.018), (0.035, 0.066), (0.085, 0.112), (0.14, 0.132), (0.12, 0.082), (0.096, 0.034), (0.104, 0.0),
+               (0.096, -0.034), (0.12, -0.082), (0.14, -0.132), (0.085, -0.112), (0.035, -0.066), (-0.01, -0.018)]
+    T.add(sdf.slab(outline, 0.02, end - d * 0.01, d, np.array([0, 0, 1.0], dtype=np.float32), round_r=0.008), C['tail_top'], k=0.012)
+    return T
+
+
+def tail_post(V, N, col):
+    under = smoothstep(0.15, -0.55, N[:, 2]) * (1 - smoothstep(0.36, 0.42, V[:, 0]) * 0.8)
+    base = C['tail_top'] * (1 - under[:, None]) + C['tail_under'] * under[:, None]
+    shade = col / np.maximum(C['tail_top'], 1e-4)
+    return base * np.clip(shade.mean(axis=1, keepdims=True), 0.35, 1.0)
+
+
+def sculpt_shoes():
+    Sh = sdf.Field('shoes')
+    for s in (-1, 1):
+        x = s * 0.049
+        Sh.add(sdf.ellipsoid((x, -0.016, 0.03), (0.034, 0.056, 0.033)), C['shoe'], k=0.0)
+        Sh.carve(sdf.rounded_box((x, -0.016, -0.03), (0.06, 0.08, 0.03), 0.0), k=0.004)
+        Sh.tube([np.array(p, dtype=np.float32) for p in [(x - 0.032, -0.02, 0.036), (x, -0.03, 0.058), (x + 0.032, -0.02, 0.036)]], 0.0045, C['shoe'], k=0.003)
+        Sh.add(sdf.sphere((x + s * 0.03, -0.024, 0.04), 0.0055), C['gold'], k=0.002)
+    return Sh
+
+
+def sculpt_accents():
+    A = sdf.Field('accents')
+    for s in (-1, 1):   # light-blue bows at the ends of the headdress
+        add_bow(A, head_pt(s * 78, 24, 0.062), 0.062, (s * 0.7, -0.7, 0.12), C['bow'], knot_col=C['bow_white'], roll=s * 0.3)
+        add_bow(A, (s * 0.118, -0.14, 0.31), 0.024, (s * 0.5, -0.86, 0.1), C['gold'], knot_col=C['dress'])
+        A.add(sdf.sphere((s * 0.108, -0.028, 0.378), 0.0055), C['gold'], k=0.002)   # sleeve buttons
+    return A
 
 
 # ----------------------------------------------------------------------------- build
@@ -165,339 +418,50 @@ def build(out_path, with_anims=True):
     core.reset()
     core.clear_material_cache()
     M = dict(
-        skin=core.material('toon_skin', P['skin'], extras={'shade': P['skin_shade'], 'outline': 0.0012, 'outlineColor': P['skin_line'], 'rim': '#ffd9cc', 'rimStrength': 0.15}),
-        hair=core.material('toon_hair', '#ffffff', extras={'shade': '#8f9bd6', 'outline': 0.0016, 'outlineColor': '#0b1333', 'rim': '#9cc8ff', 'rimStrength': 0.35, 'toony': 0.9}),
-        dress=core.material('toon_dress', P['dress'], extras={'shade': P['dress_shade'], 'outline': 0.0016, 'outlineColor': '#060a1e', 'rim': '#6f8fd8', 'rimStrength': 0.3}),
-        white=core.material('toon_white', P['white'], extras={'shade': P['white_shade'], 'outline': 0.0011, 'outlineColor': P['white_line'], 'rimStrength': 0.1}),
-        fin=core.material('toon_fin', P['fin'], extras={'shade': P['fin_shade'], 'outline': 0.0015, 'outlineColor': '#060a1e', 'rim': '#7aa2ff', 'rimStrength': 0.35}),
-        tail=core.material('toon_tail', '#ffffff', extras={'shade': '#8d96cc', 'outline': 0.0018, 'outlineColor': '#070b22', 'rim': '#8fb4ff', 'rimStrength': 0.3}),
-        shoe=core.material('toon_shoe', P['shoe'], extras={'shade': '#0a0e26', 'outline': 0.0012, 'outlineColor': '#05071a', 'rim': '#8fa8ff', 'rimStrength': 0.55, 'rimPower': 2.5}),
-        gold=core.material('toon_gold', P['gold'], extras={'shade': '#a8742a', 'outline': 0.0008, 'outlineColor': '#6b4715', 'rim': '#fff2c2', 'rimStrength': 0.4}),
-        bow=core.material('toon_bow', P['bow'], extras={'shade': '#2c5cb8', 'outline': 0.001, 'outlineColor': '#173778'}),
-        silver=core.material('toon_silver', P['silver'], extras={'shade': '#9aa3bb', 'outline': 0.0006}),
+        hair=core.material('fig_hair', '#ffffff', extras={'rough': 0.46, 'coat': 0.25, 'coatRough': 0.35, 'sheen': 0.6, 'sheenColor': '#a9ccff', 'env': 0.85}),
+        skin=core.material('fig_skin', '#ffffff', extras={'rough': 0.62, 'sheen': 0.5, 'sheenColor': '#ffd2c4', 'env': 0.7, 'emissive': '#ffb8a0', 'emissiveIntensity': 0.06}),
+        dress=core.material('fig_dress', '#ffffff', extras={'rough': 0.7, 'sheen': 0.6, 'sheenColor': '#6f86d8', 'env': 0.8}),
+        white=core.material('fig_white', '#ffffff', extras={'rough': 0.65, 'sheen': 0.4, 'sheenColor': '#dfe8ff', 'env': 0.8}),
+        fin=core.material('fig_fin', '#ffffff', extras={'rough': 0.45, 'coat': 0.3, 'env': 0.9}),
+        tail=core.material('fig_tail', '#ffffff', extras={'rough': 0.42, 'coat': 0.35, 'env': 0.9}),
+        shoe=core.material('fig_shoe', '#ffffff', extras={'rough': 0.25, 'coat': 1.0, 'coatRough': 0.08, 'env': 1.1}),
+        accents=core.material('fig_accents', '#ffffff', extras={'rough': 0.4, 'coat': 0.4, 'env': 1.0}),
         face=core.material('face_bluefish', '#ffffff', image=TEX, alpha='image'),
     )
+    objs = {}
+    base = realize(sculpt_hair(), 'hair', M['hair'], voxel=0.0026, target=9000, post=hair_post, cav=0.25, cav_dist=0.01)
+    locks = S.obj('hair_locks', S.merge_geos(*hair_locks()), M['hair'], fix_normals=False)
+    S.recalc_normals(locks)
+    core.paint(locks, lambda co: hair_post(co, None, np.tile(C['hair_mid'], (len(co), 1))))
+    objs['hair'] = core.join([base, locks], 'hair')
+    tris = core.tri_count(objs['hair'])
+    if tris > 30000:
+        core.add_modifier(objs['hair'], 'DECIMATE', ratio=30000 / tris, use_collapse_triangulate=True)
+        core.apply_modifiers(objs['hair'])
+    objs['skin'] = realize(sculpt_skin(), 'skin', M['skin'], voxel=0.0022, target=9000, cav=0.15)
+    objs['dress'] = realize(sculpt_dress(), 'dress', M['dress'], voxel=0.0024, target=9000, cav=0.35)
+    objs['white'] = realize(sculpt_white(), 'white', M['white'], voxel=0.0022, target=16000, cav=0.4)
+    objs['fins'] = realize(sculpt_fins(), 'fins', M['fin'], voxel=0.002, target=3000, cav=0.3)
+    objs['tail'] = realize(sculpt_tail(), 'tail', M['tail'], voxel=0.0025, target=4000, post=tail_post, cav=0.2)
+    objs['shoes'] = realize(sculpt_shoes(), 'shoes', M['shoe'], voxel=0.002, target=2500, cav=0.2)
+    objs['accents'] = realize(sculpt_accents(), 'accents', M['accents'], voxel=0.0018, target=4000, cav=0.3)
 
-    parts = {}
+    # face decals projected onto the sculpted head
+    bvh = F.surface_bvh(objs['skin'])
+    ex = 0.062
+    objs['expr_eyes_open'] = core.join([F.decal('eyeR', bvh, (-ex, -0.3, EYE_Z), (0.092, 0.118), (0, 0), M['face']),
+                                        F.decal('eyeL', bvh, (ex, -0.3, EYE_Z), (0.092, 0.118), (0, 0), M['face'], mirror=True)], 'expr_eyes_open')
+    objs['expr_eyes_happy'] = core.join([F.decal('eyeRh', bvh, (-ex, -0.3, EYE_Z - 0.004), (0.084, 0.1), (1, 0), M['face']),
+                                         F.decal('eyeLh', bvh, (ex, -0.3, EYE_Z - 0.004), (0.084, 0.1), (1, 0), M['face'], mirror=True)], 'expr_eyes_happy')
+    objs['expr_mouth_open'] = F.decal('expr_mouth_open', bvh, (0, -0.3, 0.574), (0.07, 0.07), (0, 1), M['face'])
+    objs['expr_mouth_small'] = F.decal('expr_mouth_small', bvh, (0, -0.3, 0.587), (0.05, 0.05), (1, 1), M['face'])
+    objs['expr_mouth_round'] = F.decal('expr_mouth_round', bvh, (0, -0.3, 0.587), (0.044, 0.044), (2, 1), M['face'])
+    objs['expr_mouth_cat'] = F.decal('expr_mouth_cat', bvh, (0, -0.3, 0.589), (0.054, 0.054), (3, 1), M['face'])
+    objs['face_blush'] = core.join([F.decal('blushR', bvh, (-0.093, -0.3, 0.602), (0.07, 0.042), (0, 2), M['face'], offset=0.0008),
+                                    F.decal('blushL', bvh, (0.093, -0.3, 0.602), (0.07, 0.042), (0, 2), M['face'], mirror=True, offset=0.0008)], 'face_blush')
+    objs['emblem'] = F.decal('emblem', F.surface_bvh(objs['white']), (0, -0.4, 0.33), (0.075, 0.075), (2, 2), M['face'], offset=0.0012)
 
-    # ---------------- head
-    def jaw(p):
-        p = p.copy()
-        low = np.clip(-p[:, 2], 0, 1)
-        front = np.clip(-p[:, 1], 0, 1)
-        p[:, 0] *= 1 - 0.13 * low ** 1.5 + 0.03 * front * np.exp(-((p[:, 2] + 0.25) / 0.3) ** 2)
-        p[:, 1] *= 1 - 0.06 * low ** 1.5
-        p[:, 1] -= 0.04 * front * low * (1 - low)  # soft chin/cheek volume forward
-        p[:, 2] *= 1 - 0.02 * low
-        return p
-    head = S.obj('head', S.transform_geo(S.sphere(HEAD_R, 48, 32, deform=jaw), loc=HEAD_C), M['skin'])
-    neck = S.obj('neck', S.sweep([(0, 0.01, 0.53), (0, 0.012, 0.61)], n=6, profile=S.prof_circle(16), width=0.029, cap0=False, cap1=False), M['skin'])
-
-    # ---------------- face decals (projected along +Y onto the head)
-    bvh = F.surface_bvh(head)
-    EYE = (0.061, 0.688)
-    eyes_open = [F.decal('eyeR', bvh, (-EYE[0], -0.2, EYE[1]), (0.082, 0.096), (0, 0), M['face']),
-                 F.decal('eyeL', bvh, (EYE[0], -0.2, EYE[1]), (0.082, 0.096), (0, 0), M['face'], mirror=True)]
-    eyes_happy = [F.decal('eyeRh', bvh, (-EYE[0], -0.2, EYE[1] - 0.004), (0.082, 0.09), (1, 0), M['face']),
-                  F.decal('eyeLh', bvh, (EYE[0], -0.2, EYE[1] - 0.004), (0.082, 0.09), (1, 0), M['face'], mirror=True)]
-    mouth_open = F.decal('mouth_open', bvh, (0, -0.2, 0.628), (0.058, 0.058), (0, 1), M['face'])
-    mouth_small = F.decal('mouth_small', bvh, (0, -0.2, 0.632), (0.05, 0.05), (1, 1), M['face'])
-    mouth_o = F.decal('mouth_round', bvh, (0, -0.2, 0.632), (0.045, 0.045), (2, 1), M['face'])
-    mouth_cat = F.decal('mouth_cat', bvh, (0, -0.2, 0.634), (0.056, 0.056), (3, 1), M['face'])
-    blush = [F.decal('blushR', bvh, (-0.09, -0.2, 0.648), (0.068, 0.042), (0, 2), M['face'], offset=0.0008),
-             F.decal('blushL', bvh, (0.09, -0.2, 0.648), (0.068, 0.042), (0, 2), M['face'], mirror=True, offset=0.0008)]
-    brows = []
-
-    # ---------------- hair
-    hair_geos = []
-    # scalp cap with a face opening
-    cap_r = HEAD_R + np.array([0.012, 0.012, 0.012])
-    V, Fc, UV = S.sphere(cap_r, 40, 26)
-    V = V + HEAD_C + np.array([0, 0.004, 0.004])
-    keep = []
-    for f in Fc:
-        cxyz = V[list(f)].mean(axis=0) - HEAD_C
-        d = cxyz / np.linalg.norm(cxyz)
-        az = math.degrees(math.atan2(d[0], -d[1]))
-        el = math.degrees(math.asin(d[2]))
-        if abs(az) < 72 and el < 42:
-            continue
-        if el < -35 and abs(az) < 120:
-            continue
-        keep.append(f)
-    hair_geos.append((V, keep, UV))
-
-    # bangs: layered soft clumps from the crown front down to the eyelids
-    bang_specs = [  # (az_root, az_tip, el_tip, width, off_tip, curl)
-        (-66, -76, 4, 0.036, 0.024, -1), (-50, -58, 10, 0.04, 0.02, -1), (-36, -41, 2, 0.04, 0.019, -1),
-        (-22, -24, 9, 0.038, 0.018, 0), (-9, -8, -1, 0.034, 0.018, 1), (3, 5, -6, 0.022, 0.02, 0),
-        (13, 15, 3, 0.036, 0.018, -1), (26, 30, 10, 0.04, 0.018, 1), (40, 46, 1, 0.04, 0.019, 1),
-        (54, 62, 9, 0.04, 0.02, 1), (68, 78, 3, 0.036, 0.024, 1),
-    ]
-    for azr, azt, elt, w, offt, curl in bang_specs:
-        pts = [head_pt(azr + (azt - azr) * t ** 1.3, 66 + (elt - 66) * t ** 0.8, off=0.008 + (offt - 0.008) * t) for t in np.linspace(0, 1, 7)]
-        tipdir = head_dir(azt + curl * 8, elt - 12)
-        pts.append(pts[-1] + (tipdir - head_dir(azt, elt)) * 0.1 + np.array([0, -0.003, -0.01]))
-        hair_geos.append(clump(pts, w, 0.014, n=18, tip_start=0.62, root=0.7))
-    # side locks framing the face down to the chest (wavy)
-    for side in (-1, 1):
-        for k, (azr, width, zend, xo, yo) in enumerate([(66, 0.042, 0.46, 0.0, 0.0), (82, 0.046, 0.43, 0.03, 0.03)]):
-            p0 = head_pt(side * azr, 40, 0.012)
-            p1 = head_pt(side * (azr + 4), 8, 0.024)
-            p2 = head_pt(side * (azr + 8), -20, 0.036) + np.array([side * 0.01, -0.004, 0])
-            p3 = np.array([side * (0.19 + xo), -0.07 + yo, 0.575])
-            p4 = np.array([side * (0.205 + xo), -0.066 + yo, 0.525])
-            p5 = np.array([side * (0.19 + xo), -0.07 + yo, zend + 0.045])
-            p6 = np.array([side * (0.205 + xo), -0.065 + yo, zend])
-            hair_geos.append(clump([p0, p1, p2, p3, p4, p5, p6], width, 0.022, n=28, tip_start=0.72, blunt=0.12))
-    # side volume puffs at cheek level (makes the wide silhouette of the reference)
-    for side in (-1, 1):
-        for azr, zend, flare in [(96, 0.47, 0.11), (112, 0.45, 0.12)]:
-            pts = [head_pt(side * azr, el, off=0.016 + 0.02 * (1 - (el + 20) / 75)) for el in (55, 30, 5, -20)]
-            b = pts[-1]
-            pts += [b + np.array([side * 0.045, 0.01, -0.06]), b + np.array([side * flare, 0.02, -0.12]),
-                    b + np.array([side * (flare + 0.005), 0.03, -0.2]), np.array([side * (0.2 + flare * 0.3), b[1] + 0.03, zend])]
-            hair_geos.append(clump(pts, 0.07, 0.03, n=26, tip_start=0.78, root=0.8, blunt=0.15))
-    # long wavy back hair: broad locks with coherent waves and softly curled tips, two layers
-    rng = np.random.default_rng(11)
-    for layer, (azs, zmid, fl, w0, amp0) in enumerate([
-            (np.linspace(100, 260, 13), 0.30, 0.13, 0.098, 0.03),
-            (np.linspace(120, 240, 8), 0.39, 0.09, 0.1, 0.024)]):
-        for i, az in enumerate(azs):
-            side = math.sin(math.radians(az))
-            root_el = 62 - layer * 10 + rng.uniform(-3, 3)
-            z_end = zmid + 0.045 * abs(side) + rng.uniform(-0.012, 0.012)
-            flare = fl * (0.85 + 0.45 * abs(side))
-            pts = [head_pt(az, el, off=0.014 + layer * 0.008 + 0.022 * (1 - (el + 8) / (root_el + 8))) for el in np.linspace(root_el, -8, 6)]
-            base = pts[-1]
-            radial = np.array([base[0], base[1], 0.0])
-            radial /= np.linalg.norm(radial)
-            tangent = np.cross([0, 0, 1.0], radial)
-            ph = 0.9 + 0.55 * i + layer * 0.8
-            zs = np.linspace(base[2] - 0.05, z_end, 8)
-            for k, z in enumerate(zs):
-                t = (k + 1) / len(zs)
-                wave = math.sin(ph + t * 2 * np.pi * 1.35)
-                p = base + radial * (flare * t ** 0.75 + 0.35 * amp0 * math.cos(ph + t * 2 * np.pi * 1.35)) + tangent * amp0 * wave
-                p[2] = z
-                pts.append(p)
-            # soft curl at the tip
-            last, prev = pts[-1], pts[-2]
-            d = (last - prev) / np.linalg.norm(last - prev)
-            curl = radial * 0.022 + np.array([0, 0, 0.012]) + tangent * 0.006 * (1 if i % 2 else -1)
-            pts.append(last + d * 0.018 + curl * 0.6)
-            w = w0 + rng.uniform(-0.006, 0.006)
-            hair_geos.append(clump(pts, w, 0.032, n=30, tip_start=0.8, root=0.8, blunt=0.18))
-    # inner curtain to hide gaps between back strands
-    th0, th1 = math.radians(15), math.radians(165)
-    prof = [(0.15, 0.68), (0.168, 0.58), (0.19, 0.48), (0.21, 0.40), (0.225, 0.34)]
-    Vc, Fcur, UVc = S.lathe(prof, n_seg=40, theta0=th0, theta_len=th1 - th0)
-    hair_geos.append((Vc + np.array([0, 0.012, 0]), Fcur, UVc))
-    # ahoge
-    ah = [(0.0, 0.03, 0.872), (0.004, 0.012, 0.935), (0.0, -0.035, 0.978), (-0.004, -0.078, 0.965), (-0.002, -0.084, 0.935)]
-    hair_geos.append(S.sweep(ah, n=20, profile=S.prof_lens(8, 0.7), width=width_profile(0.013, 0.9, 0.2, 0.55),
-                             thick=0.006, up=(1, 0, 0), tip1=True))
-    hair = S.obj('hair', S.merge_geos(*hair_geos), M['hair'], fix_normals=False)
-    S.recalc_normals(hair)
-
-    def hair_colors(co):
-        z = co[:, 2]
-        t = smoothstep(0.86, 0.30, z)
-        c = mix(lin(P['hair_root']), lin(P['hair_mid']), smoothstep(0, 0.35, t)[:, None])
-        c = mix(c, lin(P['hair_tip']), smoothstep(0.4, 1.0, t)[:, None] ** 1.2)
-        # inner layers (close to the body axis at the back) a little darker
-        r = np.hypot(co[:, 0], co[:, 1] - 0.0)
-        inner = (1 - smoothstep(0.15, 0.2, r)) * (z < 0.62)
-        c = mix(c, c * 0.85, inner[:, None])
-        return c
-    core.paint(hair, hair_colors)
-
-    # ---------------- headdress: ruffled band over the crown + bows
-    tilt = math.radians(22)
-    arc = []
-    for t in np.linspace(-1, 1, 25):
-        a = t * math.radians(98)
-        d = np.array([math.sin(a), -math.sin(tilt) * math.cos(a), math.cos(a) * math.cos(tilt)])
-        r = 1.0 / math.sqrt((d[0] / (HEAD_R[0] + 0.03)) ** 2 + (d[1] / (HEAD_R[1] + 0.03)) ** 2 + (d[2] / (HEAD_R[2] + 0.028)) ** 2)
-        arc.append(HEAD_C + np.array([0, 0.005, 0.004]) + d * r)
-    arc = np.array(arc)
-    outward = lambda p, t: (p - HEAD_C) / np.linalg.norm(p - HEAD_C)
-    band = S.obj('band', S.sweep(arc, n=60, profile=S.prof_ribbon(8, 0.3), width=0.011, thick=0.005, up=(0, -math.sin(tilt), math.cos(tilt))), M['white'])
-    frill = pleated_strip(arc, 120, 0.032, 22, 0.006, outward, thick=0.0025, name='frill', mat=M['white'])
-    lace = pleated_strip(arc, 110, 0.012, 22, 0.004,
-                         lambda p, t: -((p - HEAD_C) / np.linalg.norm(p - HEAD_C)) * 0.3 + np.array([0, -1.0, -0.4]),
-                         thick=0.002, name='lace', mat=M['white'], edge_wave=0.2)
-    bows_head = [bow(head_pt(s * 80, 26, 0.04), 0.046, M['bow'], M['white'],
-                     facing=(s * 0.75, -0.66, 0.1), roll=s * 0.25, name=f'hbow{s}') for s in (-1, 1)]
-    headdress = core.join([band, frill, lace] + bows_head, 'headdress')
-
-    # ---------------- whale-fin ears with white fluff (stick out past the hair like in the reference)
-    fin_outline = [(0.0, 0.03), (0.04, 0.042), (0.08, 0.04), (0.114, 0.026), (0.136, 0.004), (0.13, -0.014),
-                   (0.098, -0.024), (0.06, -0.03), (0.022, -0.035), (0.0, -0.032)]
-    fins = []
-    for side in (-1, 1):
-        ol = [(x * side, z) for x, z in fin_outline]
-        if side < 0:
-            ol = ol[::-1]
-        fn = S.outline_obj(f'fin{side}', ol, M['fin'], plane='XZ', thickness=0.016, subdiv=2, pillow=0.9)
-        fluff_path = [(side * x, 0.0, z) for x, z in [(0.004, -0.03), (0.035, -0.032), (0.07, -0.027), (0.105, -0.017), (0.128, -0.006)]]
-        prof = np.array([(math.cos(a) * (1 + 0.18 * math.sin(7 * a)), math.sin(a) * (1 + 0.18 * math.sin(7 * a))) for a in np.linspace(0, 2 * np.pi, 20, endpoint=False)])
-        fl = S.obj(f'fluff{side}', S.sweep(fluff_path, n=24, profile=prof, width=[0.011, 0.013, 0.011, 0.007, 0.002], thick=[0.015, 0.016, 0.013, 0.009, 0.003], up=(0, -1, 0)), M['white'])
-        f = core.join([fn, fl], f'fin_{"L" if side > 0 else "R"}')
-        f.rotation_euler = (0, math.radians(10 * side), math.radians(-14 * side))
-        f.location = (side * 0.172, 0.008, 0.712)
-        bpy.context.view_layer.update()
-        core.apply_transform(f)
-        fins.append(f)
-
-    # ---------------- torso, collar, bow, apron bib
-    torso_prof = [(0.056, 0.40), (0.064, 0.44), (0.068, 0.48), (0.066, 0.51), (0.058, 0.535), (0.044, 0.552), (0.028, 0.562)]
-    torso = S.obj('torso', S.lathe(torso_prof, 36, mod=lambda th, t: np.outer(1 - 0.18 * np.sin(th) ** 2, np.ones(len(t)))), M['dress'])
-    collar = ruffle_ring(0.556, 0.03, 0.064, 0.012, 16, 0.08, name='collar', mat=M['white'])
-    neckbow = bow((0, -0.062, 0.542), 0.024, M['dress'], M['silver'], facing=(0, -1, 0), name='neckbow')
-    # apron bib: white panel on the chest front with frilled straps
-    bib_pts = []
-    bib = S.obj('bib', S.lathe([(0.0695, 0.43), (0.071, 0.47), (0.0685, 0.505), (0.06, 0.53)], 16,
-                               theta0=math.radians(245), theta_len=math.radians(50),
-                               mod=lambda th, t: np.outer(1 - 0.18 * np.sin(th) ** 2, np.ones(len(t))) + 0.004), M['white'])
-    straps = []
-    for side in (-1, 1):
-        a0 = math.radians(270 + side * 26)
-        path = []
-        for z, r in [(0.43, 0.071), (0.47, 0.073), (0.505, 0.07), (0.53, 0.062), (0.548, 0.05)]:
-            rr = r * (1 - 0.18 * math.sin(a0) ** 2) + 0.004
-            path.append((rr * math.cos(a0), rr * math.sin(a0), z))
-        path.append((side * 0.04, 0.02, 0.556))
-        straps.append(pleated_strip(path, 60, 0.014, 9, 0.003, lambda p, t, s=side: np.array([s * 1.0, -0.4, 0.0]), thick=0.002, name=f'strap{side}', mat=M['white']))
-    body = core.join([torso, collar, neckbow, bib] + straps, 'body')
-
-    # ---------------- skirt, petticoat, apron skirt, bows
-    skirt_prof = [(0.066, 0.43), (0.08, 0.415), (0.108, 0.39), (0.14, 0.35), (0.162, 0.315), (0.176, 0.29), (0.182, 0.278), (0.186, 0.268), (0.18, 0.262)]
-    def folds(th, t):
-        return 1 + np.outer(np.sin(th * 9) * 0.035 + np.sin(th * 4 + 1) * 0.012, t ** 1.4) - np.outer(0.08 * np.sin(th) ** 2 * 0 , t)
-    skirt = S.obj('skirt', S.lathe(skirt_prof, 72, mod=folds), M['dress'])
-
-    def skirt_colors(co):
-        z = co[:, 2]
-        base = lin(P['dress'])
-        band = lin(P['dress_band'])
-        c = np.tile(np.ones(3), (len(co), 1))
-        t = ((z > 0.268) & (z < 0.30)).astype(float)
-        c = mix(c, band / np.maximum(base, 1e-3), t[:, None] * 0.6)
-        return np.clip(c, 0, 4)
-    core.paint(skirt, skirt_colors)
-    petti1 = ruffle_ring(0.285, 0.165, 0.198, 0.04, 30, 0.07, name='petti1', mat=M['white'])
-    petti2 = ruffle_ring(0.258, 0.17, 0.205, 0.036, 34, 0.08, name='petti2', mat=M['white'])
-    apron_prof = [(0.071, 0.425), (0.085, 0.405), (0.112, 0.38), (0.14, 0.345), (0.158, 0.315), (0.164, 0.305)]
-    apron = S.obj('apron', S.lathe([(r + 0.006, z) for r, z in apron_prof], 30, theta0=math.radians(270 - 52), theta_len=math.radians(104),
-                                   mod=lambda th, t: 1 + np.outer(np.sin(th * 9) * 0.035, np.array(t) ** 1.4)), M['white'])
-    apron_edge = []
-    for k in range(31):
-        a = math.radians(270 - 52 + 104 * k / 30)
-        r = (0.164 + 0.006) * (1 + math.sin(a * 9) * 0.035)
-        apron_edge.append((r * math.cos(a), r * math.sin(a), 0.305))
-    apron_frill = pleated_strip(apron_edge, 120, 0.03, 16, 0.005, lambda p, t: np.array([p[0] * 0.3, p[1] * 0.3, -1.0]), thick=0.0022, name='apron_frill', mat=M['white'])
-    side_edges = []
-    for s in (-1, 1):
-        a = math.radians(270 + s * 52)
-        path = []
-        for r, z in apron_prof:
-            rr = (r + 0.006) * (1 + math.sin(a * 9) * 0.035 * ((0.425 - z) / 0.12) ** 1.4)
-            path.append((rr * math.cos(a), rr * math.sin(a), z))
-        side_edges.append(pleated_strip(path, 50, 0.013, 7, 0.003, lambda p, t, s=s: np.array([s * 1.0, 0.2, 0.0]), thick=0.002, name=f'apron_side{s}', mat=M['white']))
-    emblem = F.decal('emblem', F.surface_bvh(apron), (0, -0.3, 0.352), (0.075, 0.075), (2, 2), M['face'], offset=0.0012)
-    gold_bows = [bow((s * 0.118, -0.128, 0.328), 0.017, M['gold'], M['dress'], facing=(s * 0.55, -0.83, 0.1), name=f'gbow{s}') for s in (-1, 1)]
-    back_bow = bow((0, 0.082, 0.425), 0.038, M['white'], facing=(0, 1, 0), name='backbow')
-    skirt_all = core.join([skirt, petti1, petti2, apron, apron_frill] + side_edges + gold_bows + [back_bow], 'skirt')
-
-    # ---------------- arms (A-pose), cuffs, hands
-    arms = []
-    for side in (-1, 1):
-        sh = np.array([side * 0.07, 0.0, 0.528])
-        el = np.array([side * 0.128, -0.004, 0.445])
-        wr = np.array([side * 0.162, -0.012, 0.378])
-        sleeve = S.obj(f'sleeve{side}', S.sweep([sh, sh * 0.5 + el * 0.5 + np.array([side * 0.006, 0, 0.004]), el, wr], n=20,
-                                                 profile=S.prof_circle(16), width=[0.03, 0.036, 0.03, 0.026, 0.028], cap0=True, cap1=True), M['dress'])
-        d = (wr - el) / np.linalg.norm(wr - el)
-        cuff_prof = np.array([(math.cos(a) * (1 + 0.1 * math.sin(14 * a)), math.sin(a) * (1 + 0.1 * math.sin(14 * a))) for a in np.linspace(0, 2 * np.pi, 42, endpoint=False)])
-        cuff = S.obj(f'cuff{side}', S.sweep([wr - d * 0.004, wr + d * 0.006, wr + d * 0.014], n=5, profile=cuff_prof, width=[0.029, 0.033, 0.031],
-                                             up=(0, -1, 0)), M['white'])
-        hc = wr + d * 0.03
-        hand = S.obj(f'hand{side}', S.transform_geo(S.sphere((0.019, 0.016, 0.024), 20, 14), loc=hc,
-                                                    rot=(0, -side * 25, 0)), M['skin'])
-        thumb = S.obj(f'thumb{side}', S.transform_geo(S.sphere((0.007, 0.007, 0.011), 12, 8), loc=hc + np.array([-side * 0.004, -0.014, 0.004]),
-                                                      rot=(20, 0, 0)), M['skin'])
-        cuff_btn = S.obj(f'btn{side}', S.transform_geo(S.sphere((0.004, 0.004, 0.004), 10, 6), loc=el * 0.35 + wr * 0.65 + np.array([side * 0.004, -0.026, 0])), M['gold'])
-        arms.append(core.join([sleeve, cuff, hand, thumb, cuff_btn], f'arm_{"L" if side > 0 else "R"}'))
-
-    # ---------------- legs, socks, shoes
-    legs = []
-    for side in (-1, 1):
-        x = side * 0.044
-        leg = S.obj(f'leg{side}', S.sweep([(x, 0.0, 0.36), (x * 1.02, -0.004, 0.24), (x * 1.03, -0.004, 0.15), (x * 1.03, 0.0, 0.07)], n=24,
-                                          profile=S.prof_circle(16), width=[0.038, 0.034, 0.03, 0.027], cap0=True, cap1=True), M['skin'])
-
-        def sock_col(co):
-            t = smoothstep(0.128, 0.122, co[:, 2])
-            skin_to_white = mix(np.ones(3), lin(P['white']) / lin(P['skin']), t[:, None])
-            return skin_to_white
-        core.paint(leg, sock_col)
-        sock_prof = np.array([(math.cos(a) * (1 + 0.12 * math.sin(12 * a)), math.sin(a) * (1 + 0.12 * math.sin(12 * a))) for a in np.linspace(0, 2 * np.pi, 36, endpoint=False)])
-        sock_top = S.obj(f'socktop{side}', S.sweep([(x * 1.03, -0.002, 0.108), (x * 1.03, -0.002, 0.121), (x * 1.03, -0.002, 0.134)], n=4,
-                                                   profile=sock_prof, width=[0.03, 0.035, 0.032], up=(0, -1, 0)), M['white'])
-        shoe = S.obj(f'shoe{side}', S.transform_geo(S.sphere((0.032, 0.056, 0.03), 28, 16,
-                                                             deform=lambda p: np.stack([p[:, 0], p[:, 1], np.where(p[:, 2] < -0.35, -0.35 - (p[:, 2] + 0.35) * 0.25, p[:, 2])], 1)),
-                                                   loc=(x * 1.05, -0.02, 0.03)), M['shoe'])
-        strap = S.obj(f'strap{side}', S.sweep([(x * 1.05 - 0.03, -0.02, 0.03), (x * 1.05, -0.028, 0.058), (x * 1.05 + 0.03, -0.02, 0.03)], n=16,
-                                              profile=S.prof_ribbon(8, 0.3), width=0.006, thick=0.002, up=(0, -1, 0.3)), M['shoe'])
-        buckle = S.obj(f'buckle{side}', S.transform_geo(S.sphere((0.004, 0.003, 0.004), 10, 6), loc=(x * 1.05 + side * 0.028, -0.024, 0.036)), M['gold'])
-        legs.append(core.join([leg, sock_top, shoe, strap, buckle], f'leg_{"L" if side > 0 else "R"}'))
-
-    # ---------------- whale tail + upright fluke
-    tail_path = [(0.0, 0.05, 0.37), (0.07, 0.12, 0.30), (0.16, 0.15, 0.22), (0.26, 0.13, 0.18), (0.34, 0.09, 0.18), (0.40, 0.06, 0.205)]
-    tail = S.obj('tail', S.sweep(tail_path, n=40, profile=S.prof_circle(18), width=[0.064, 0.06, 0.05, 0.038, 0.026, 0.016],
-                                 thick=[0.06, 0.056, 0.046, 0.034, 0.022, 0.013], up=(0, 0, 1), cap0=True, cap1=True), M['tail'])
-    fl_out = [(0.0, 0.016), (0.04, 0.066), (0.09, 0.112), (0.142, 0.13), (0.122, 0.082), (0.098, 0.034), (0.106, 0.0),
-              (0.098, -0.034), (0.122, -0.082), (0.142, -0.13), (0.09, -0.112), (0.04, -0.066), (0.0, -0.016)]
-    fluke = S.outline_obj('fluke', fl_out, M['tail'], plane='XZ', thickness=0.014, subdiv=2, pillow=0.8)
-    end = np.array(tail_path[-1])
-    tdir = end - np.array(tail_path[-2])
-    tdir /= np.linalg.norm(tdir)
-    yaw = math.degrees(math.atan2(tdir[1], tdir[0]))
-    pitch = math.degrees(math.asin(tdir[2]))
-    # fluke lies in the vertical plane containing the tail direction (reads like the video from the front)
-    fluke.rotation_euler = (0, math.radians(-pitch), math.radians(yaw))
-    fluke.location = tuple(end - tdir * 0.014)
-    bpy.context.view_layer.update()
-    core.apply_transform(fluke)
-    tail_all = core.join([tail, fluke], 'tail')
-    me = tail_all.data
-
-    def tail_colors(co):
-        n = np.empty(len(me.vertices) * 3)
-        me.vertices.foreach_get('normal', n)
-        n = n.reshape(-1, 3)
-        under = smoothstep(0.1, -0.6, n[:, 2]) * (1 - smoothstep(0.30, 0.36, co[:, 0]) * 0.7)
-        return mix(lin(P['tail_top']), lin(P['tail_under']), under[:, None])
-    core.paint(tail_all, tail_colors)
-
-    # ---------------- groups for export
-    face_group = core.join(eyes_open, 'expr_eyes_open')
-    happy_group = core.join(eyes_happy, 'expr_eyes_happy')
-    mouth_open.name = 'expr_mouth_open'
-    mouth_small.name = 'expr_mouth_small'
-    mouth_o.name = 'expr_mouth_round'
-    mouth_cat.name = 'expr_mouth_cat'
-    blush_group = core.join(blush, 'face_blush')
-    head_all = core.join([head, neck], 'head')
-
-    objs = dict(head=head_all, hair=hair, headdress=headdress, fin_L=fins[1], fin_R=fins[0], body=body, skirt=skirt_all,
-                arm_L=arms[1], arm_R=arms[0], leg_L=legs[1], leg_R=legs[0], tail=tail_all,
-                expr_eyes_open=face_group, expr_eyes_happy=happy_group, expr_mouth_open=mouth_open,
-                expr_mouth_small=mouth_small, expr_mouth_round=mouth_o, expr_mouth_cat=mouth_cat, face_blush=blush_group,
-                emblem=emblem)
-
-    arm = rig(objs, tail_path)
+    arm = rig(objs)
     if with_anims:
         from . import bluefish_anims
         bluefish_anims.add(arm)
@@ -508,41 +472,41 @@ def build(out_path, with_anims=True):
 
 # ----------------------------------------------------------------------------- rig
 
-def rig(objs, tail_path):
-    tp = [np.array(p) for p in tail_path]
+def rig(objs):
+    tp = [np.array(p) for p in TAIL_PATH]
     bones = [
         ('root', (0, 0, 0), (0, 0, 0.08), None),
-        ('hips', (0, 0, 0.38), (0, 0, 0.45), 'root'),
-        ('spine', (0, 0, 0.45), (0, 0, 0.50), 'hips'),
-        ('chest', (0, 0, 0.50), (0, 0, 0.555), 'spine'),
-        ('neck', (0, 0, 0.555), (0, 0, 0.60), 'chest'),
-        ('head', (0, 0, 0.60), (0, 0, 0.86), 'neck'),
-        ('eye.L', (0.058, -0.14, 0.694), (0.058, -0.17, 0.694), 'head'),
-        ('eye.R', (-0.058, -0.14, 0.694), (-0.058, -0.17, 0.694), 'head'),
-        ('ahoge', (0, 0.03, 0.872), (0, -0.02, 0.975), 'head'),
-        ('fin.L', (0.146, 0.018, 0.722), (0.235, 0.05, 0.69), 'head'),
-        ('fin.R', (-0.146, 0.018, 0.722), (-0.235, 0.05, 0.69), 'head'),
-        ('hair.B.1', (0, 0.15, 0.70), (0, 0.2, 0.52), 'head'),
-        ('hair.B.2', (0, 0.2, 0.52), (0, 0.23, 0.32), 'hair.B.1'),
-        ('hair.L.1', (0.13, 0.1, 0.70), (0.2, 0.12, 0.52), 'head'),
-        ('hair.L.2', (0.2, 0.12, 0.52), (0.23, 0.13, 0.32), 'hair.L.1'),
-        ('hair.R.1', (-0.13, 0.1, 0.70), (-0.2, 0.12, 0.52), 'head'),
-        ('hair.R.2', (-0.2, 0.12, 0.52), (-0.23, 0.13, 0.32), 'hair.R.1'),
-        ('lock.L', (0.15, -0.07, 0.66), (0.17, -0.06, 0.46), 'head'),
-        ('lock.R', (-0.15, -0.07, 0.66), (-0.17, -0.06, 0.46), 'head'),
-        ('upperarm.L', (0.07, 0, 0.528), (0.128, -0.004, 0.445), 'chest'),
-        ('lowerarm.L', (0.128, -0.004, 0.445), (0.162, -0.012, 0.378), 'upperarm.L'),
-        ('hand.L', (0.162, -0.012, 0.378), (0.178, -0.016, 0.34), 'lowerarm.L'),
-        ('upperarm.R', (-0.07, 0, 0.528), (-0.128, -0.004, 0.445), 'chest'),
-        ('lowerarm.R', (-0.128, -0.004, 0.445), (-0.162, -0.012, 0.378), 'upperarm.R'),
-        ('hand.R', (-0.162, -0.012, 0.378), (-0.178, -0.016, 0.34), 'lowerarm.R'),
-        ('upperleg.L', (0.044, 0, 0.36), (0.045, -0.004, 0.2), 'hips'),
-        ('lowerleg.L', (0.045, -0.004, 0.2), (0.045, 0, 0.066), 'upperleg.L'),
-        ('foot.L', (0.045, 0, 0.066), (0.046, -0.06, 0.02), 'lowerleg.L'),
-        ('upperleg.R', (-0.044, 0, 0.36), (-0.045, -0.004, 0.2), 'hips'),
-        ('lowerleg.R', (-0.045, -0.004, 0.2), (-0.045, 0, 0.066), 'upperleg.R'),
-        ('foot.R', (-0.045, 0, 0.066), (-0.046, -0.06, 0.02), 'lowerleg.R'),
-        ('prop', (0, -0.13, 0.42), (0, -0.13, 0.47), 'chest'),
+        ('hips', (0, 0, 0.33), (0, 0, 0.40), 'root'),
+        ('spine', (0, 0, 0.40), (0, 0, 0.45), 'hips'),
+        ('chest', (0, 0, 0.45), (0, 0, 0.50), 'spine'),
+        ('neck', (0, 0, 0.50), (0, 0, 0.55), 'chest'),
+        ('head', (0, 0, 0.55), (0, 0, 0.82), 'neck'),
+        ('eye.L', (0.063, -0.13, EYE_Z), (0.063, -0.16, EYE_Z), 'head'),
+        ('eye.R', (-0.063, -0.13, EYE_Z), (-0.063, -0.16, EYE_Z), 'head'),
+        ('ahoge', (0, 0.03, 0.83), (0, -0.03, 0.94), 'head'),
+        ('fin.L', (0.165, -0.006, 0.64), (0.32, 0.02, 0.6), 'head'),
+        ('fin.R', (-0.165, -0.006, 0.64), (-0.32, 0.02, 0.6), 'head'),
+        ('hair.B.1', (0, 0.15, 0.62), (0, 0.2, 0.46), 'head'),
+        ('hair.B.2', (0, 0.2, 0.46), (0, 0.24, 0.28), 'hair.B.1'),
+        ('hair.L.1', (0.14, 0.1, 0.62), (0.21, 0.12, 0.46), 'head'),
+        ('hair.L.2', (0.21, 0.12, 0.46), (0.25, 0.12, 0.3), 'hair.L.1'),
+        ('hair.R.1', (-0.14, 0.1, 0.62), (-0.21, 0.12, 0.46), 'head'),
+        ('hair.R.2', (-0.21, 0.12, 0.46), (-0.25, 0.12, 0.3), 'hair.R.1'),
+        ('lock.L', (0.17, -0.06, 0.58), (0.2, -0.06, 0.38), 'head'),
+        ('lock.R', (-0.17, -0.06, 0.58), (-0.2, -0.06, 0.38), 'head'),
+        ('upperarm.L', (0.066, 0, 0.482), (0.112, -0.022, 0.405), 'chest'),
+        ('lowerarm.L', (0.112, -0.022, 0.405), (0.132, -0.042, 0.35), 'upperarm.L'),
+        ('hand.L', (0.132, -0.042, 0.35), (0.142, -0.052, 0.305), 'lowerarm.L'),
+        ('upperarm.R', (-0.066, 0, 0.482), (-0.112, -0.022, 0.405), 'chest'),
+        ('lowerarm.R', (-0.112, -0.022, 0.405), (-0.132, -0.042, 0.35), 'upperarm.R'),
+        ('hand.R', (-0.132, -0.042, 0.35), (-0.142, -0.052, 0.305), 'lowerarm.R'),
+        ('upperleg.L', (0.047, 0, 0.30), (0.048, -0.004, 0.16), 'hips'),
+        ('lowerleg.L', (0.048, -0.004, 0.16), (0.049, 0, 0.06), 'upperleg.L'),
+        ('foot.L', (0.049, 0, 0.06), (0.049, -0.06, 0.02), 'lowerleg.L'),
+        ('upperleg.R', (-0.047, 0, 0.30), (-0.048, -0.004, 0.16), 'hips'),
+        ('lowerleg.R', (-0.048, -0.004, 0.16), (-0.049, 0, 0.06), 'upperleg.R'),
+        ('foot.R', (-0.049, 0, 0.06), (-0.049, -0.06, 0.02), 'lowerleg.R'),
+        ('prop', (0, -0.13, 0.38), (0, -0.13, 0.43), 'chest'),
     ]
     tail_names = []
     for i in range(len(tp) - 1):
@@ -552,50 +516,101 @@ def rig(objs, tail_path):
     arm = core.armature('rig_bluefish', bones)
     segs = core.bone_segments(arm)
 
-    def w_rigid(o, b):
-        return core.rigid(len(o.data.vertices), b)
+    def dist_to(co, name):
+        return core.seg_dist(co, *segs[name])[0]
 
-    # head-mounted parts
-    for key in ('head', 'headdress', 'expr_mouth_open', 'expr_mouth_small', 'expr_mouth_round', 'expr_mouth_cat', 'face_blush'):
-        core.bind(objs[key], arm, w_rigid(objs[key], 'head'))
+    def rigid(o, b):
+        core.bind(o, arm, core.rigid(len(o.data.vertices), b))
+
+    for key in ('expr_mouth_open', 'expr_mouth_small', 'expr_mouth_round', 'expr_mouth_cat', 'face_blush'):
+        rigid(objs[key], 'head')
     for key in ('expr_eyes_open', 'expr_eyes_happy'):
         co = core.verts_of(objs[key])
         core.bind(objs[key], arm, {'eye.L': (co[:, 0] > 0).astype(float), 'eye.R': (co[:, 0] <= 0).astype(float)})
-    core.bind(objs['fin_L'], arm, w_rigid(objs['fin_L'], 'fin.L'))
-    core.bind(objs['fin_R'], arm, w_rigid(objs['fin_R'], 'fin.R'))
+    rigid(objs['emblem'], 'hips')
 
-    # hair: head on top, hanging parts follow hair bones
+    # fins
+    co = core.verts_of(objs['fins'])
+    core.bind(objs['fins'], arm, {'fin.L': (co[:, 0] > 0).astype(float), 'fin.R': (co[:, 0] <= 0).astype(float)})
+
+    # hair: head on top, hanging parts follow the hair bones
     co = core.verts_of(objs['hair'])
-    hang = smoothstep(0.66, 0.5, co[:, 2])
+    hang = smoothstep(0.6, 0.45, co[:, 2])
     names = ['hair.B.1', 'hair.B.2', 'hair.L.1', 'hair.L.2', 'hair.R.1', 'hair.R.2', 'lock.L', 'lock.R']
     pw = core.proximity_weights(co, segs, names, falloff=3.0)
     tot = sum(pw.values())
     tot[tot == 0] = 1
     w = {n: pw[n] / tot * hang for n in names}
     w['head'] = 1 - hang
-    ah = (co[:, 2] > 0.88) & (np.abs(co[:, 0]) < 0.02)
+    ah = (co[:, 2] > 0.84) & (np.abs(co[:, 0]) < 0.02)
     w = {k: np.where(ah, 0, v) for k, v in w.items()}
     w['ahoge'] = ah.astype(float)
     core.bind(objs['hair'], arm, w)
 
-    # body
-    co = core.verts_of(objs['body'])
-    core.bind(objs['body'], arm, core.proximity_weights(co, segs, ['hips', 'spine', 'chest', 'neck'], falloff=2.5))
-    # skirt: hips, lower part pulled a little by the thighs
-    co = core.verts_of(objs['skirt'])
-    k = np.clip((0.36 - co[:, 2]) / 0.1, 0, 1) * 0.35
-    core.bind(objs['skirt'], arm, {'hips': 1 - k, 'upperleg.L': k * (co[:, 0] > 0), 'upperleg.R': k * (co[:, 0] <= 0)})
-    # arms / legs
+    # skin: head/neck, hands, legs
+    co = core.verts_of(objs['skin'])
+    wts = {n: np.zeros(len(co)) for n in ['head', 'neck', 'hand.L', 'hand.R', 'upperleg.L', 'lowerleg.L', 'upperleg.R', 'lowerleg.R']}
+    head = co[:, 2] > 0.5
+    wts['head'] = head * smoothstep(0.52, 0.56, co[:, 2])
+    wts['neck'] = head * (1 - smoothstep(0.52, 0.56, co[:, 2]))
+    hands = (~head) & (np.abs(co[:, 0]) > 0.1) & (co[:, 2] > 0.28)
+    wts['hand.L'] = hands & (co[:, 0] > 0)
+    wts['hand.R'] = hands & (co[:, 0] < 0)
+    legs = (~head) & (~hands)
+    for s, sgn in (('L', 1), ('R', -1)):
+        side = legs & (np.sign(co[:, 0]) == sgn)
+        cw = core.chain_weights(co, segs, [f'upperleg.{s}', f'lowerleg.{s}'], blend=0.3)
+        wts[f'upperleg.{s}'] = side * cw[f'upperleg.{s}']
+        wts[f'lowerleg.{s}'] = side * cw[f'lowerleg.{s}']
+    core.bind(objs['skin'], arm, {k: v.astype(float) for k, v in wts.items()})
+
+    # dress: torso/skirt on the spine, sleeves on the arms, skirt hem pulled a little by the thighs
+    co = core.verts_of(objs['dress'])
+    arml = {s: (np.minimum(dist_to(co, f'upperarm.{s}'), dist_to(co, f'lowerarm.{s}')) < 0.045) & (np.abs(co[:, 0]) > 0.055) & (co[:, 2] > 0.33)
+            for s in ('L', 'R')}
+    wd = {}
     for s in ('L', 'R'):
-        co = core.verts_of(objs[f'arm_{s}'])
-        core.bind(objs[f'arm_{s}'], arm, core.chain_weights(co, segs, [f'upperarm.{s}', f'lowerarm.{s}', f'hand.{s}'], blend=0.25))
-        co = core.verts_of(objs[f'leg_{s}'])
-        w = core.chain_weights(co, segs, [f'upperleg.{s}', f'lowerleg.{s}'], blend=0.25)
-        shoe = co[:, 2] < 0.066
-        w = {k2: np.where(shoe, 0, v) for k2, v in w.items()}
-        w[f'foot.{s}'] = shoe.astype(float)
-        core.bind(objs[f'leg_{s}'], arm, w)
+        cw = core.chain_weights(co, segs, [f'upperarm.{s}', f'lowerarm.{s}'], blend=0.3)
+        m = arml[s] & (np.sign(co[:, 0]) == (1 if s == 'L' else -1))
+        wd[f'upperarm.{s}'] = m * cw[f'upperarm.{s}']
+        wd[f'lowerarm.{s}'] = m * cw[f'lowerarm.{s}']
+    body = ~(arml['L'] | arml['R'])
+    kleg = np.clip((0.3 - co[:, 2]) / 0.1, 0, 1) * 0.3
+    wd['chest'] = body * smoothstep(0.43, 0.47, co[:, 2])
+    wd['spine'] = body * smoothstep(0.38, 0.42, co[:, 2]) * (1 - smoothstep(0.43, 0.47, co[:, 2]))
+    hipw = body * (1 - smoothstep(0.38, 0.42, co[:, 2]))
+    wd['hips'] = hipw * (1 - kleg)
+    wd['upperleg.L'] = hipw * kleg * (co[:, 0] > 0)
+    wd['upperleg.R'] = hipw * kleg * (co[:, 0] <= 0)
+    core.bind(objs['dress'], arm, {k: v.astype(float) for k, v in wd.items()})
+
+    # white parts: headdress with the head, cuffs with hands, sock frills with shins, the rest on the body
+    co = core.verts_of(objs['white'])
+    ww = {}
+    headp = co[:, 2] > 0.6
+    cuffs = (~headp) & (co[:, 2] > 0.3) & (co[:, 2] < 0.38) & (np.abs(co[:, 0]) > 0.1)
+    socks = co[:, 2] < 0.13
+    rest = ~(headp | cuffs | socks)
+    ww['head'] = headp
+    ww['lowerarm.L'] = cuffs & (co[:, 0] > 0)
+    ww['lowerarm.R'] = cuffs & (co[:, 0] < 0)
+    ww['lowerleg.L'] = socks & (co[:, 0] > 0)
+    ww['lowerleg.R'] = socks & (co[:, 0] <= 0)
+    kleg = np.clip((0.3 - co[:, 2]) / 0.1, 0, 1) * 0.3
+    ww['chest'] = rest & (co[:, 2] > 0.45)
+    ww['hips'] = (rest & (co[:, 2] <= 0.45)) * (1 - kleg)
+    ww['upperleg.L'] = (rest & (co[:, 2] <= 0.45)) * kleg * (co[:, 0] > 0)
+    ww['upperleg.R'] = (rest & (co[:, 2] <= 0.45)) * kleg * (co[:, 0] <= 0)
+    core.bind(objs['white'], arm, {k: np.asarray(v, dtype=float) for k, v in ww.items()})
+
+    # accents: head bows with head, skirt bows with hips, sleeve buttons with arms
+    co = core.verts_of(objs['accents'])
+    headp = co[:, 2] > 0.6
+    btn = (~headp) & (co[:, 2] > 0.34)
+    core.bind(objs['accents'], arm, {'head': headp.astype(float), 'upperarm.L': (btn & (co[:, 0] > 0)).astype(float),
+                                     'upperarm.R': (btn & (co[:, 0] < 0)).astype(float), 'hips': (~headp & ~btn).astype(float)})
+    co = core.verts_of(objs['shoes'])
+    core.bind(objs['shoes'], arm, {'foot.L': (co[:, 0] > 0).astype(float), 'foot.R': (co[:, 0] <= 0).astype(float)})
     co = core.verts_of(objs['tail'])
     core.bind(objs['tail'], arm, core.chain_weights(co, segs, tail_names, blend=0.4))
-    core.bind(objs['emblem'], arm, w_rigid(objs['emblem'], 'hips'))
     return arm

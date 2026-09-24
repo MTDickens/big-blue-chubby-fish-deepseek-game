@@ -79,6 +79,30 @@ function addOutline(mesh) {
   g.addGroup(0, count, 1);
 }
 
+// Figure (手办) look: soft physically based shading with gloss, like a painted PVC figure.
+function makeFigure(src, st, vertexColors) {
+  const m = new THREE.MeshPhysicalMaterial({
+    name: src.name,
+    color: src.color,
+    map: src.map || null,
+    vertexColors,
+    roughness: st.rough ?? 0.55,
+    metalness: st.metal ?? 0.0,
+    clearcoat: st.coat ?? 0.0,
+    clearcoatRoughness: st.coatRough ?? 0.25,
+    sheen: st.sheen ?? 0.0,
+    sheenRoughness: st.sheenRough ?? 0.6,
+    sheenColor: new THREE.Color(st.sheenColor ?? '#ffffff'),
+    envMapIntensity: st.env ?? 0.9,
+    side: st.double ? THREE.DoubleSide : THREE.FrontSide,
+  });
+  if (st.emissive) {
+    m.emissive.set(st.emissive);
+    m.emissiveIntensity = st.emissiveIntensity ?? 0.12;
+  }
+  return m;
+}
+
 // Returns the list of MToon materials so callers can tweak them (e.g. outline toggle).
 export function toonify(root, { outlines = true, envMap = null } = {}) {
   const mtoons = [];
@@ -96,6 +120,10 @@ export function toonify(root, { outlines = true, envMap = null } = {}) {
       if (outlines) addOutline(o);
       o.castShadow = true;
       o.receiveShadow = false;
+    } else if (name.startsWith('fig_')) {
+      o.material = makeFigure(src, st, vc);
+      o.castShadow = true;
+      o.receiveShadow = true;
     } else if (name.startsWith('face_')) {
       o.material = new THREE.MeshBasicMaterial({
         name, map: src.map || null, color: src.color, transparent: true, depthWrite: false,
