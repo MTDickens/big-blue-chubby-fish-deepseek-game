@@ -111,19 +111,23 @@ def build_box(out_path):
 
 
 def build_rope(out_path):
-    """A few loose coils sized to wrap 大圆鲸 (body center z=0.3, radius ~0.28)."""
+    """Thick coils stacked around 大圆鲸's lower body, like EP3 where it sits tied up below the mouth line.
+    The whale is an ellipsoid centered at (0, 0, 0.3) with radii (0.29, 0.27, 0.275)."""
     core.reset()
     core.clear_material_cache()
     mat = core.material('pbr_rope', '#ffffff', rough=0.9, extras={'env': 0.4})
     Rf = sdf.Field('rope')
-    for i, (z, tilt) in enumerate(((0.24, 6), (0.32, -4), (0.4, 8))):
+    rr = 0.017
+    for i, z in enumerate(np.linspace(0.075, 0.215, 5)):
+        tilt = math.radians((-1) ** i * 3)
         pts = []
-        for a in np.linspace(0, TAU, 40, endpoint=False):
-            r = math.sqrt(max(0.0, 0.29 ** 2 * (1 - ((z - 0.3) / 0.28) ** 2))) + 0.012
-            pts.append(np.array((r * math.cos(a), r * math.sin(a) * 0.95, z + math.radians(tilt) * r * math.cos(a)), dtype=np.float32))
-        Rf.tube(pts, 0.011, lin('#b98f5a'), k=0.004, closed=True)
-    rope = realize(Rf, 'rope', mat, voxel=0.0022, target=6000, cav=0.2,
-                   post=lambda V, N, c: c * (0.85 + 0.15 * np.sin(np.arctan2(V[:, 1], V[:, 0]) * 90 + V[:, 2] * 400))[:, None])
+        for a in np.linspace(0, TAU, 48, endpoint=False):
+            zz = z + tilt * 0.28 * math.cos(a)
+            k = math.sqrt(max(0.02, 1 - ((zz - 0.3) / 0.275) ** 2))
+            pts.append(np.array((0.29 * k * math.cos(a) + rr * 0.6 * math.cos(a), 0.27 * k * math.sin(a) + rr * 0.6 * math.sin(a), zz), dtype=np.float32))
+        Rf.tube(pts, rr, lin('#b98f5a'), k=0.006, closed=True)
+    rope = realize(Rf, 'rope', mat, voxel=0.0022, target=8000, cav=0.25,
+                   post=lambda V, N, c: c * (0.82 + 0.18 * np.sin(np.arctan2(V[:, 1], V[:, 0]) * 120 + V[:, 2] * 380))[:, None])
     arm = core.armature('rig_rope', [('root', (0, 0, 0), (0, 0, 0.1), None)])
     core.bind(rope, arm, core.rigid(len(rope.data.vertices), 'root'))
     stats = {'rope': core.tri_count(rope)}

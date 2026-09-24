@@ -1,0 +1,11 @@
+{
+  "name": "big-blue-chubby-fish",
+  "private": true,
+  "description": "蓝色大肥鱼 fan game: character gallery and tools",
+  "scripts": {
+    "build": "node tools/gallery/build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

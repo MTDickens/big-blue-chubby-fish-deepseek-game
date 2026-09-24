@@ -434,13 +434,22 @@ def doubao_body():
     Bf.add(sdf.ellipsoid((0, 0, 0.5), (0.25, 0.21, 0.32)), sk, k=0.0)
     Bf.add(sdf.ellipsoid(BC, BR), sk, k=0.07)
     for s in (-1, 1):
-        Bf.tube([np.array((s * 0.2, 0.0, 0.7)), np.array((s * 0.27, -0.02, 0.56)), np.array((s * 0.285, -0.03, 0.44))], [0.055, 0.05, 0.046], sk, k=0.04)
+        Bf.add(sdf.sphere((s * 0.19, 0.0, 0.69), 0.05), sk, k=0.05)   # shoulder bumps that the separate arms plug into
         Bf.add(sdf.round_cone((s * 0.1, 0.0, 0.3), (s * 0.11, -0.005, 0.05), 0.075, 0.066), sk, k=0.05)
-        Bf.paint(sdf.sphere((s * 0.285, -0.03, 0.42), 0.05), BPAL['dark'], k=0.012)   # dark hand tips
         Bf.paint(sdf.ellipsoid((s * 0.11, -0.01, 0.02), (0.09, 0.09, 0.05)), BPAL['dark'], k=0.012)   # dark feet
         Bf.carve(sdf.rounded_box((s * 0.11, 0, -0.03), (0.1, 0.1, 0.03), 0.0), k=0.004)
     Bf.paint(sdf.ellipsoid((0, -0.2, 0.5), (0.2, 0.14, 0.24)), BPAL['belly'], k=0.02)
     return Bf
+
+
+def doubao_arms():
+    """Arms are their own mesh: fused into the body they tore the torso whenever they bent."""
+    A = sdf.Field('arms')
+    sk = BPAL['skin']
+    for s in (-1, 1):
+        A.tube([np.array((s * 0.175, 0.0, 0.705)), np.array((s * 0.27, -0.02, 0.56)), np.array((s * 0.285, -0.03, 0.44))], [0.056, 0.05, 0.046], sk, k=0.04)
+        A.paint(sdf.sphere((s * 0.285, -0.03, 0.42), 0.05), BPAL['dark'], k=0.012)   # dark hand tips
+    return A
 
 
 def doubao_hair():
@@ -466,6 +475,7 @@ def build_doubao(out_path):
         face=core.material('face_bluefish', '#ffffff', image=TEX, alpha='image'),
     )
     objs = {'body': realize(doubao_body(), 'body', M['body'], voxel=0.003, target=10000, cav=0.15),
+            'arms': realize(doubao_arms(), 'arms', M['body'], voxel=0.0025, target=3000, cav=0.1),
             'hair': realize(doubao_hair(), 'hair', M['hair'], voxel=0.0028, target=6000, cav=0.25)}
     bvh = F.surface_bvh(objs['body'])
     ex, ez = 0.07, 0.96
@@ -503,18 +513,22 @@ def doubao_rig(objs):
     segs = core.bone_segments(arm)
     co = core.verts_of(objs['body'])
     headp = smoothstep(0.76, 0.84, co[:, 2])
-    armp = {s: ((np.abs(co[:, 0]) > 0.215) & (np.sign(co[:, 0]) == sg) & (co[:, 2] < 0.74)) for s, sg in (('L', 1), ('R', -1))}
     legp = {s: ((co[:, 2] < 0.26) & (np.sign(co[:, 0]) == sg)) for s, sg in (('L', 1), ('R', -1))}
     w = {'head': headp}
     for s in ('L', 'R'):
-        cw = core.chain_weights(co, segs, [f'arm.{s}', f'forearm.{s}'], blend=0.3)
-        w[f'arm.{s}'] = armp[s] * cw[f'arm.{s}']
-        w[f'forearm.{s}'] = armp[s] * cw[f'forearm.{s}']
         w[f'leg.{s}'] = legp[s] * smoothstep(0.26, 0.18, co[:, 2])
     rest = np.clip(1 - sum(np.asarray(v, dtype=float) for v in w.values()), 0, 1)
     w['spine'] = rest * smoothstep(0.5, 0.62, co[:, 2])
     w['hips'] = rest * (1 - smoothstep(0.5, 0.62, co[:, 2]))
     core.bind(objs['body'], arm, {k: np.asarray(v, dtype=float) for k, v in w.items()})
+    co = core.verts_of(objs['arms'])
+    wa = {}
+    for s, sg in (('L', 1), ('R', -1)):
+        side = (np.sign(co[:, 0]) == sg).astype(float)
+        cw = core.chain_weights(co, segs, [f'arm.{s}', f'forearm.{s}'], blend=0.3)
+        wa[f'arm.{s}'] = side * cw[f'arm.{s}']
+        wa[f'forearm.{s}'] = side * cw[f'forearm.{s}']
+    core.bind(objs['arms'], arm, wa)
     for k in ('hair', 'brows', 'expr_mouth_small', 'expr_mouth_round', 'face_blush'):
         core.bind(objs[k], arm, core.rigid(len(objs[k].data.vertices), 'head'))
     co = core.verts_of(objs['expr_eyes_open'])

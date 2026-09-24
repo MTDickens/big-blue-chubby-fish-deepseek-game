@@ -1,5 +1,6 @@
 // QA renderer for charkit models: clean turnarounds / close-ups / lineups for review.
 // Query: m=path.glb[,path2.glb] anim=name t=seconds view=turn4|front|q|side|back|face|hero
+//        focus=x,y,z dist=d (explicit framing)
 //        bg=studio|beach|night_street|night_sea|harbor flat=#hex outline=0|1 w= h= hide=obj1,obj2 show=obj1
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -28,7 +29,7 @@ try {
   const stage = new Stage(renderer, scene, { base: '../../' });
   await stage.set(q.get('bg') || 'studio');
   if (q.get('flat')) scene.background = new THREE.Color(q.get('flat'));
-  if (q.get('stand') === '0') stage.stand.visible = false;
+  if (q.get('stand') === '0') stage.setStand(false);
 
   const loader = new GLTFLoader();
   const group = new THREE.Group();
@@ -98,6 +99,17 @@ try {
     const head = new THREE.Vector3(center.x, box.max.y - size.y * 0.25, center.z);
     const az = +(q.get('az') || 0);
     place(az, W / H, { focus: head, frame: new THREE.Vector3(size.x * 0.5, size.y * 0.5, size.z * 0.4), elev: 2, pad: 1.0 });
+    renderer.render(scene, camera);
+  } else if (q.get('focus')) {
+    // explicit framing: focus=x,y,z (three.js space) dist=<m>, used for roster portraits
+    const f = new THREE.Vector3(...q.get('focus').split(',').map(Number));
+    const d = +(q.get('dist') || 1);
+    const a = THREE.MathUtils.degToRad(+(q.get('az') || 0));
+    const e = THREE.MathUtils.degToRad(+(q.get('elev') || 0));
+    camera.aspect = W / H;
+    camera.position.set(f.x + Math.sin(a) * Math.cos(e) * d, f.y + Math.sin(e) * d, f.z + Math.cos(a) * Math.cos(e) * d);
+    camera.lookAt(f);
+    camera.updateProjectionMatrix();
     renderer.render(scene, camera);
   } else {
     const az = q.get('az') !== null ? +q.get('az') : (views[view] ?? 20);

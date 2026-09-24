@@ -15,13 +15,13 @@ export const STAGES = {
   },
   night_street: {
     label: '夜晚旧城', file: 'assets/bg/night_street.jpg', env: 'assets/bg/night_street_env.jpg', rot: 0,
-    sun: [0.774, 0.276, 0.57], sunColor: '#ffc98f', sunI: 2.1, hemiSky: '#5a6aa8', hemiGround: '#6b5238', hemiI: 0.75,
-    exposure: 1.0, height: 1.6, shadow: 0.42,
+    sun: [0.774, 0.276, 0.57], sunColor: '#ffdcb4', sunI: 2.4, hemiSky: '#8a9bd6', hemiGround: '#6b5238', hemiI: 1.0,
+    exposure: 1.0, height: 1.6, shadow: 0.42, envI: 0.45,
   },
   night_sea: {
     label: '夜晚海边', file: 'assets/bg/night_sea.jpg', env: 'assets/bg/night_sea_env.jpg', rot: 0,
-    sun: [0.52, 0.496, 0.696], sunColor: '#dfe8ff', sunI: 2.0, hemiSky: '#4a5d99', hemiGround: '#b98578', hemiI: 0.8,
-    exposure: 1.0, height: 1.6, shadow: 0.4,
+    sun: [0.52, 0.496, 0.696], sunColor: '#dfe8ff', sunI: 2.2, hemiSky: '#6f84c4', hemiGround: '#b98578', hemiI: 0.95,
+    exposure: 1.0, height: 1.6, shadow: 0.4, envI: 0.6,
   },
   harbor: {
     label: '港口白天', file: 'assets/bg/harbor.jpg', env: 'assets/bg/harbor_env.jpg', rot: 0,
@@ -73,7 +73,7 @@ export class Stage {
 
     // studio display base, like a figure stand
     const baseGeo = new THREE.CylinderGeometry(0.5, 0.52, 0.035, 96);
-    this.stand = new THREE.Mesh(baseGeo, new THREE.MeshStandardMaterial({ color: '#e9eefa', roughness: 0.45, metalness: 0.0 }));
+    this.stand = new THREE.Mesh(baseGeo, new THREE.MeshStandardMaterial({ color: '#aebbd9', roughness: 0.38, metalness: 0.0 }));
     this.stand.position.y = -0.0175;
     this.stand.receiveShadow = true;
     scene.add(this.stand);
@@ -113,8 +113,6 @@ export class Stage {
       if (!this.roomEnv) this.roomEnv = this.pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
       scene.environment = this.roomEnv;
       scene.environmentIntensity = 0.55;
-      this.stand.visible = true;
-      this.shadowPlane.position.y = 0.0005;
       this.shadowPlane.material.opacity = 0.28;
     } else {
       const [bg, env] = await Promise.all([this.load(s.file), this.load(s.env)]);
@@ -122,16 +120,30 @@ export class Stage {
       scene.background = bg;
       if (!env.userData.pmrem) env.userData.pmrem = this.pmrem.fromEquirectangular(env).texture;
       scene.environment = env.userData.pmrem;
-      scene.environmentIntensity = 0.8;
+      scene.environmentIntensity = s.envI ?? 0.8;
       // project the panorama onto a ground so the character stands on the photo's floor
       this.sky = new GroundedSkybox(bg, s.height, 60, 96);
       this.sky.position.y = s.height - 0.002;
       scene.add(this.sky);
-      this.stand.visible = false;
       this.shadowPlane.material.opacity = s.shadow ?? 0.35;
     }
+    this.applyStand();
     this.fit(this.lastBox);
     return s;
+  }
+
+  // Studio only: a figure base under the subject. Shadows land on it; elsewhere they land on an invisible floor.
+  setStand(on, scale = 1) {
+    this.standWanted = on;
+    this.standScale = scale;
+    this.applyStand();
+  }
+
+  applyStand() {
+    const studio = !(STAGES[this.kind] || STAGES.studio).file;
+    this.stand.visible = studio && this.standWanted !== false;
+    this.stand.scale.setScalar(this.standScale || 1);
+    this.shadowPlane.visible = !this.stand.visible;
   }
 
   // Aim the sun and size its shadow camera around the subject.

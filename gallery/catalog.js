@@ -11,7 +11,7 @@ export const CHARACTERS = [
     },
     exprSets: { eyes: ['expr_eyes_open', 'expr_eyes_happy'], mouth: ['expr_mouth_open', 'expr_mouth_small', 'expr_mouth_round', 'expr_mouth_cat'] },
     props: {
-      sign: { file: 'assets/characters/sign.glb', bone: 'prop', pos: [0, 0.43, 0.175] },
+      sign: { file: 'assets/characters/sign.glb', bone: 'prop', pos: [0, 0.402, 0.175] },
       carry: { file: 'assets/characters/rice_cooker.glb', bone: 'prop', pos: [0, 0.268, 0.14] },
     },
   },
@@ -28,7 +28,7 @@ export const CHARACTERS = [
     anims: [['idle', '待机'], ['happy', '开心'], ['hop', '蹦跳'], ['struggle', '被绑挣扎']],
     expr: { default: ['expr_eyes_open', 'expr_mouth_open'], happy: ['expr_eyes_happy', 'expr_mouth_open'], struggle: ['expr_eyes_open', 'expr_mouth_small'] },
     exprSets: { eyes: ['expr_eyes_open', 'expr_eyes_happy'], mouth: ['expr_mouth_open', 'expr_mouth_small'] },
-    props: { struggle: { file: 'assets/characters/rope.glb', bone: 'root', pos: [0, 0, 0] } },
+    props: { struggle: { file: 'assets/characters/rope.glb', bone: 'body', pos: [0, 0, 0] } },
   },
   {
     id: 'dragon', name: '白色龙娘', role: 'EP3 对手', from: 'EP3', height: 1.12,
@@ -43,7 +43,8 @@ export const CHARACTERS = [
     blurb: '豆包帮的老大，守着黄金电饭煲。被大肥鱼一招放倒。',
     files: ['assets/characters/doubao.glb'],
     anims: [['idle', '待机'], ['walk', '走路'], ['stomp', '生气跺脚'], ['knocked', '被放倒']],
-    expr: { default: ['expr_mouth_small'], stomp: ['expr_mouth_round'], knocked: ['expr_mouth_round'] },
+    once: ['knocked'],
+    expr: { default: ['expr_eyes_open', 'expr_mouth_small'], stomp: ['expr_eyes_open', 'expr_mouth_round'], knocked: ['expr_eyes_open', 'expr_mouth_round'] },
     exprSets: { mouth: ['expr_mouth_small', 'expr_mouth_round'] },
   },
   {
@@ -52,7 +53,14 @@ export const CHARACTERS = [
     files: ['assets/characters/rice_cooker.glb', 'assets/characters/golden_cooker.glb', 'assets/characters/sign.glb', 'assets/characters/box.glb'],
     offsets: { 'assets/characters/sign.glb': [0, 0.1, 0] },
     anims: [['closed', '静置'], ['open', '打开锅盖']],
+    once: ['open'],
   },
 ];
 
 export const LINEUP = ['babies', 'bluefish', 'whale_big', 'dragon', 'doubao'];
+
+export const EXPR_LABELS = {
+  expr_eyes_open: '睁眼', expr_eyes_happy: '笑眼',
+  expr_mouth_open: '张嘴笑', expr_mouth_small: '微笑', expr_mouth_round: '哦！', expr_mouth_cat: 'ω',
+};
+export const EXPR_GROUPS = { eyes: '眼睛', mouth: '嘴巴' };
