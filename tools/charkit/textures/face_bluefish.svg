@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2048" height="2048" viewBox="0 0 2048 2048">
+  <!-- 4x4 atlas, 512px cells. Eyes are drawn as the character's RIGHT eye (outer corner on the left);
+       the left eye mirrors the UVs. Layout: row0 eyes, row1 mouths, row2 blush/brow/emblem. -->
+  <defs>
+    <linearGradient id="iris" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f1f4f"/>
+      <stop offset="0.38" stop-color="#1f4595"/>
+      <stop offset="0.72" stop-color="#3a7ad0"/>
+      <stop offset="1" stop-color="#9ad6ff"/>
+    </linearGradient>
+    <radialGradient id="irisglow" cx="0.5" cy="0.85" r="0.55">
+      <stop offset="0" stop-color="#c8ecff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#c8ecff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="eyeclip">
+      <path d="M58 262 C 78 150, 382 118, 452 226 C 470 318, 430 452, 262 470 C 120 474, 52 380, 58 262 Z"/>
+    </clipPath>
+    <radialGradient id="blush" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff7d8e" stop-opacity="0.78"/>
+      <stop offset="0.55" stop-color="#ff8c9a" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#ff9aa6" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="mouthclip">
+      <path d="M120 196 Q 256 236 392 196 Q 382 372 256 392 Q 130 372 120 196 Z"/>
+    </clipPath>
+    <linearGradient id="whale" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d5fc4"/>
+      <stop offset="1" stop-color="#3f7ee0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- (0,0) eye open -->
+  <g transform="translate(0,0)">
+    <path d="M58 262 C 78 150, 382 118, 452 226 C 470 318, 430 452, 262 470 C 120 474, 52 380, 58 262 Z" fill="#fdfdff"/>
+    <g clip-path="url(#eyeclip)">
+      <ellipse cx="262" cy="300" rx="156" ry="182" fill="url(#iris)"/>
+      <ellipse cx="262" cy="300" rx="156" ry="182" fill="url(#irisglow)"/>
+      <ellipse cx="262" cy="300" rx="150" ry="176" fill="none" stroke="#0c1a44" stroke-width="12"/>
+      <ellipse cx="266" cy="262" rx="62" ry="96" fill="#081231"/>
+      <path d="M150 410 Q 262 470 380 400" fill="none" stroke="#bfe8ff" stroke-width="16" stroke-opacity="0.8" stroke-linecap="round"/>
+      <ellipse cx="205" cy="215" rx="52" ry="58" fill="#ffffff"/>
+      <circle cx="330" cy="378" r="24" fill="#ffffff"/>
+      <circle cx="238" cy="318" r="12" fill="#ffffff" fill-opacity="0.85"/>
+    </g>
+    <!-- upper lash line with outer wing -->
+    <path d="M40 272 C 70 130, 370 96, 470 214" fill="none" stroke="#24110d" stroke-width="40" stroke-linecap="round"/>
+    <path d="M58 250 C 40 262, 26 280, 14 304" fill="none" stroke="#24110d" stroke-width="22" stroke-linecap="round"/>
+    <path d="M86 196 C 60 180, 44 168, 30 150" fill="none" stroke="#24110d" stroke-width="16" stroke-linecap="round"/>
+    <path d="M118 166 C 100 142, 92 128, 86 110" fill="none" stroke="#24110d" stroke-width="12" stroke-linecap="round"/>
+    <path d="M436 196 C 452 188, 466 188, 478 196" fill="none" stroke="#24110d" stroke-width="14" stroke-linecap="round"/>
+    <!-- lower lash -->
+    <path d="M122 452 C 200 486, 330 488, 410 430" fill="none" stroke="#6a3b33" stroke-width="7" stroke-opacity="0.55" stroke-linecap="round"/>
+  </g>
+
+  <!-- (1,0) eye happy ^ -->
+  <g transform="translate(512,0)">
+    <path d="M52 356 C 120 170, 380 150, 462 330" fill="none" stroke="#24110d" stroke-width="40" stroke-linecap="round"/>
+    <path d="M62 330 C 40 330, 24 344, 12 362" fill="none" stroke="#24110d" stroke-width="20" stroke-linecap="round"/>
+  </g>
+
+  <!-- (2,0) eye closed (sleepy line) -->
+  <g transform="translate(1024,0)">
+    <path d="M52 300 C 150 350, 360 350, 462 300" fill="none" stroke="#24110d" stroke-width="36" stroke-linecap="round"/>
+    <path d="M70 312 C 50 322, 34 336, 22 356" fill="none" stroke="#24110d" stroke-width="18" stroke-linecap="round"/>
+  </g>
+
+  <!-- (0,1) mouth open smile -->
+  <g transform="translate(0,512)">
+    <path d="M120 196 Q 256 236 392 196 Q 382 372 256 392 Q 130 372 120 196 Z" fill="#a8414d"/>
+    <g clip-path="url(#mouthclip)">
+      <ellipse cx="256" cy="372" rx="100" ry="66" fill="#f08a92"/>
+      <path d="M120 196 Q 256 236 392 196 L 392 214 Q 256 256 120 214 Z" fill="#ffffff" fill-opacity="0.9"/>
+    </g>
+    <path d="M120 196 Q 256 236 392 196 Q 382 372 256 392 Q 130 372 120 196 Z" fill="none" stroke="#5e2229" stroke-width="10" stroke-linejoin="round"/>
+  </g>
+
+  <!-- (1,1) mouth small smile -->
+  <g transform="translate(512,512)">
+    <path d="M176 238 Q 256 300 336 238" fill="none" stroke="#5e2229" stroke-width="14" stroke-linecap="round"/>
+  </g>
+
+  <!-- (2,1) mouth o -->
+  <g transform="translate(1024,512)">
+    <ellipse cx="256" cy="262" rx="50" ry="62" fill="#a8414d" stroke="#5e2229" stroke-width="10"/>
+    <ellipse cx="256" cy="300" rx="30" ry="18" fill="#f08a92"/>
+  </g>
+
+  <!-- (3,1) mouth cat ω -->
+  <g transform="translate(1536,512)">
+    <path d="M150 236 Q 200 306 256 250 Q 312 306 362 236" fill="none" stroke="#5e2229" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- (0,2) blush -->
+  <g transform="translate(0,1024)">
+    <ellipse cx="256" cy="256" rx="236" ry="150" fill="url(#blush)"/>
+    <path d="M150 290 L 190 218 M 226 292 L 266 220 M 302 294 L 342 222" stroke="#ff6479" stroke-width="10" stroke-opacity="0.5" stroke-linecap="round"/>
+  </g>
+
+  <!-- (1,2) eyebrow -->
+  <g transform="translate(512,1024)">
+    <path d="M70 300 Q 256 214 440 276" fill="none" stroke="#1e2d62" stroke-width="20" stroke-linecap="round"/>
+  </g>
+
+  <!-- (2,2) whale emblem (apron) -->
+  <g transform="translate(1024,1024)">
+    <path d="M70 300 C 70 190, 190 130, 300 150 C 380 164, 430 220, 436 280 C 452 250, 470 214, 492 200 C 486 246, 470 286, 440 318 C 430 380, 360 420, 262 420 C 150 420, 70 380, 70 300 Z" fill="url(#whale)" stroke="#1b3f8f" stroke-width="10"/>
+    <path d="M96 330 C 150 400, 330 410, 410 350 C 360 392, 150 392, 96 330 Z" fill="#d7e8ff"/>
+    <circle cx="170" cy="262" r="18" fill="#0d1a3e"/>
+    <circle cx="164" cy="256" r="6" fill="#ffffff"/>
+    <path d="M200 300 Q 226 318 252 302" fill="none" stroke="#0d1a3e" stroke-width="8" stroke-linecap="round"/>
+    <path d="M240 140 C 236 110, 224 92, 206 80 M 244 138 C 252 104, 270 86, 292 78 M 242 140 L 242 92" fill="none" stroke="#6fb2ff" stroke-width="14" stroke-linecap="round"/>
+    <ellipse cx="300" cy="200" rx="40" ry="22" fill="#ffffff" fill-opacity="0.35"/>
+  </g>
+</svg>
