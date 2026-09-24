@@ -60,13 +60,37 @@ const gltfCache = new Map();
 const progress = new Map();
 const EYE_TRACK = /^eye[LR]\./;   // three strips dots from node names: eye.L -> eyeL
 
+// Hosts that don't serve .glb (claude.ai artifacts) get each model as base64 inside <file>.json instead.
+async function fetchWrapped(file) {
+  const res = await fetch(`${BASE}${file}.json`);
+  if (!res.ok) throw new Error(`${file}: HTTP ${res.status}`);
+  const total = +res.headers.get('content-length') || 0;
+  const reader = res.body.getReader();
+  const parts = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    loaded += value.length;
+    progress.set(file, [loaded, Math.max(total, loaded)]);
+    showProgress();
+  }
+  const text = await new Blob(parts).text();
+  const b64 = JSON.parse(text).glb;
+  const bytes = Uint8Array.fromBase64 ? Uint8Array.fromBase64(b64) : Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  return loader.parseAsync(bytes.buffer, '');
+}
+
 function loadGLB(file) {
   if (!gltfCache.has(file)) {
-    const p = loader
-      .loadAsync(BASE + file, (e) => {
+    const load = window.GALLERY_GLB_JSON
+      ? fetchWrapped(file)
+      : loader.loadAsync(BASE + file, (e) => {
         progress.set(file, [e.loaded, e.total || e.loaded]);
         showProgress();
-      })
+      });
+    const p = load
       .then((g) => {
         toonify(g.scene, { outlines: false });
         // Blinks layer on top of every other clip, so body clips must not own the eye bones.
@@ -542,7 +566,9 @@ function buildStaticHud() {
     await stage.set(k);
     syncChips('#bgs', k);
   }, { 'data-v': k })));
-  $('#shot').addEventListener('click', screenshot);
+  // hosts that block page-started downloads (claude.ai artifacts) get no screenshot button
+  if (window.GALLERY_NO_DOWNLOAD) $('#shot').hidden = true;
+  else $('#shot').addEventListener('click', screenshot);
   $('#turn').addEventListener('click', () => {
     state.turn = !state.turn;
     $('#turn').classList.toggle('on', state.turn);

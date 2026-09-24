@@ -39,15 +39,26 @@ await esbuild.build({
 });
 console.log('wrote', path.relative(ROOT, out), (fs.statSync(out).size / 1024).toFixed(0) + ' KB');
 
+// The artifact host supplies the document skeleton, so keep only the title, font link, styles and body content.
 const i = process.argv.indexOf('--artifact');
 if (i > 0) {
   const dest = process.argv[i + 1];
-  let html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const css = fs.readFileSync(path.join(ROOT, 'gallery/style.css'), 'utf8');
   const js = fs.readFileSync(out, 'utf8').replace(/<\/script/gi, '<\\/script');
-  html = html
-    .replace('<link rel="stylesheet" href="gallery/style.css">', () => `<style>\n${css}</style>`)
-    .replace('<script type="module" src="gallery/dist/app.js"></script>', () => `<script type="module">\n${js}</script>`);
-  fs.writeFileSync(dest, html);
+  const title = html.match(/<title>[\s\S]*?<\/title>/)[0];
+  const fonts = html.match(/<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com[^>]*>/)[0];
+  const body = html.match(/<body[^>]*>([\s\S]*)<\/body>/)[1]
+    .replace('<script type="module" src="gallery/dist/app.js"></script>',
+      () => `<script>window.GALLERY_NO_DOWNLOAD = true; window.GALLERY_GLB_JSON = true;</script>\n<script type="module">\n${js}</script>`);
+  fs.writeFileSync(dest, `${title}\n${fonts}\n<style>\n${css}</style>\n${body}`);
   console.log('wrote', dest, (fs.statSync(dest).size / 1024).toFixed(0) + ' KB');
+  // artifacts serve JSON but not .glb, so each model travels as {"glb": "<base64>"} next to the page
+  const dir = path.join(path.dirname(dest), 'assets/characters');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const f of fs.readdirSync(path.join(ROOT, 'assets/characters')).filter((n) => n.endsWith('.glb'))) {
+    const b64 = fs.readFileSync(path.join(ROOT, 'assets/characters', f)).toString('base64');
+    fs.writeFileSync(path.join(dir, `${f}.json`), JSON.stringify({ glb: b64 }));
+  }
+  console.log('wrote', dir, '*.glb.json');
 }
