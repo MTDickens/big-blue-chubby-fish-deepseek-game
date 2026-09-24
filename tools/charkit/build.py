@@ -7,7 +7,7 @@ import time
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, ROOT)
 
-ALL = ['bluefish']
+ALL = ['bluefish', 'whales', 'rivals', 'props']
 
 
 def main(names):
@@ -17,7 +17,8 @@ def main(names):
         out = os.path.join(ROOT, 'assets', 'characters', f'{name}.glb')
         stats = mod.build(out)
         tris = sum(stats.values())
-        print(f'{name}: {tris} tris, {os.path.getsize(out) / 1024:.0f} KB, {time.time() - t0:.1f}s')
+        size = f'{os.path.getsize(out) / 1024:.0f} KB' if os.path.exists(out) else 'multiple files'
+        print(f'{name}: {tris} tris, {size}, {time.time() - t0:.1f}s')
         for k, v in sorted(stats.items(), key=lambda kv: -kv[1]):
             print(f'   {k:18s} {v}')
 
